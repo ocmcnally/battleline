@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 battleline_gui.py)",
+      "Bash(echo \"GUI launched \\(PID $!\\)\")",
+      "Bash(python3 -c ':*)"
+    ]
+  }
+}
