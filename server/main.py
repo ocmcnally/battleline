@@ -6,41 +6,28 @@ Run from the project root:
 
 HTTP endpoints
 ──────────────
-POST /join          { username }  → { token, status, game_id?, player_idx? }
-GET  /game/{id}     ?token=...   → { state }
+POST /games              { token, username }      → { game_id }
+GET  /games                                       → { games: [...] }
+POST /games/{id}/join    { token, username }      → { game_id, player_idx }
+DELETE /games/{id}       ?token=...               → { ok }
+GET  /game/{id}          ?token=...               → { state }
 
 WebSocket
 ─────────
 WS /ws?token=...
 
-Client → Server messages
-  { "action": "move", "move": <MoveObject> }
-  { "action": "ping" }
+Server → Client
+  { type:"waiting",    game_id? }
+  { type:"game_start", game_id, player_idx, state }
+  { type:"state",      game_id, state }
+  { type:"error",      message }
+  { type:"pong" }
 
-Server → Client messages
-  { "type": "waiting" }
-  { "type": "game_start",  "game_id", "player_idx", "state" }
-  { "type": "state",       "game_id", "state" }
-  { "type": "error",       "message" }
-  { "type": "pong" }
-
-MoveObject shapes
-  play_card:        { action, card, totem, draw_from_tactics? }
-  play_wild:        { action, tactic, totem, suit, value, draw_from_tactics? }
-  play_environment: { action, tactic, totem, draw_from_tactics? }
-  scout_reveal:     { action, tactic, troop_count, tactics_count }
-  scout_return:     { action, returns: [{card, dest}] }
-  play_redeploy:    { action, tactic, from_totem, card, to_totem?, draw_from_tactics? }
-  play_traitor:     { action, tactic, from_totem, card, to_totem, draw_from_tactics? }
-  play_deserter:    { action, tactic, from_totem, card, draw_from_tactics? }
-
-Card shapes
-  troop:   { type:"troop",   suit, value }
-  tactics: { type:"tactics", name }
-  wild:    { type:"wild",    tactic_name, suit, value }
+Client → Server
+  { action:"move", move:<MoveObject> }
+  { action:"ping" }
 """
 
-import uuid
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -53,7 +40,7 @@ app = FastAPI(title="Battle Line")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # tighten to your frontend origin in production
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -62,33 +49,44 @@ gm = GameManager()
 cm = ConnectionManager()
 
 
-# ── HTTP ──────────────────────────────────────────────────────────────────────
+# ── Pydantic request bodies ───────────────────────────────────────────────────
 
-class JoinRequest(BaseModel):
+class GameRequest(BaseModel):
+    token:    str
     username: str
 
 
-@app.post("/join")
-async def join(req: JoinRequest):
-    token = str(uuid.uuid4()).replace("-", "")[:16]
-    game_id = gm.enqueue(token, req.username)
+# ── HTTP ──────────────────────────────────────────────────────────────────────
 
-    if game_id is None:
-        return {"token": token, "status": "waiting"}
+@app.post("/games")
+async def create_game(req: GameRequest):
+    game_id = gm.create_game(req.token, req.username)
+    return {"game_id": game_id}
 
+
+@app.get("/games")
+async def list_games():
+    return {"games": gm.list_open_games()}
+
+
+@app.post("/games/{game_id}/join")
+async def join_game(game_id: str, req: GameRequest):
+    ok, err = gm.join_game(req.token, req.username, game_id)
+    if not ok:
+        raise HTTPException(400, err)
     session = gm.sessions[game_id]
-    player_idx = gm.token_to_player[token]
-
-    # Notify the waiting player via WebSocket if they're already connected
-    other_token = session.tokens[1 - player_idx]
+    # Notify creator (already on WS) that opponent joined
     await cm.notify_matched(session)
+    return {"game_id": game_id, "player_idx": gm.token_to_player[req.token]}
 
-    return {
-        "token": token,
-        "status": "matched",
-        "game_id": game_id,
-        "player_idx": player_idx,
-    }
+
+@app.delete("/games/{game_id}")
+async def cancel_game(game_id: str, token: str = Query(...)):
+    pending = gm._pending.get(game_id)
+    if not pending or pending.token != token:
+        raise HTTPException(403, "Not the game creator.")
+    gm.cancel_pending(token)
+    return {"ok": True}
 
 
 @app.get("/game/{game_id}")
@@ -108,14 +106,18 @@ async def get_game(game_id: str, token: str = Query(...)):
 async def ws_endpoint(ws: WebSocket, token: str = Query(...)):
     await cm.connect(token, ws)
 
-    # If player is already matched, send current state immediately
     result = gm.get_session(token)
     if result:
         session, player_idx = result
-        state = game_view(session.game, player_idx)
-        await ws.send_json({"type": "state", "game_id": session.id, "state": state})
+        await ws.send_json({
+            "type": "state",
+            "game_id": session.id,
+            "state": game_view(session.game, player_idx),
+        })
     else:
-        await ws.send_json({"type": "waiting"})
+        # Could be a pending game (creator waiting) or unknown token
+        pending_id = gm.is_pending(token)
+        await ws.send_json({"type": "waiting", "game_id": pending_id})
 
     try:
         while True:
@@ -123,12 +125,11 @@ async def ws_endpoint(ws: WebSocket, token: str = Query(...)):
             action = data.get("action")
 
             if action == "move":
-                move = data.get("move", {})
-                msg, ok = gm.apply_move(token, move)
+                msg, ok = gm.apply_move(token, data.get("move", {}))
                 if ok:
-                    result = gm.get_session(token)
-                    if result:
-                        await cm.broadcast_state(result[0])
+                    r = gm.get_session(token)
+                    if r:
+                        await cm.broadcast_state(r[0])
                 else:
                     await ws.send_json({"type": "error", "message": msg})
 

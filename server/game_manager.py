@@ -1,9 +1,18 @@
-"""In-memory game sessions, matchmaking queue, and move dispatch."""
+"""In-memory game sessions, pending games, and move dispatch."""
 
+import time
 import uuid
 from battleline import (
     BattleLineGame, Card, WildCard, TacticsCard, SUITS,
 )
+
+
+class PendingGame:
+    def __init__(self, game_id: str, token: str, username: str):
+        self.game_id    = game_id
+        self.token      = token
+        self.username   = username
+        self.created_at = time.time()
 
 
 class GameSession:
@@ -11,38 +20,75 @@ class GameSession:
         self.game = game
         self.tokens = tokens          # [token_p0, token_p1]
         self.id = game_id
-        # player index waiting to resolve scout_return, or None
         self.pending_scout: int | None = None
 
 
 class GameManager:
     def __init__(self):
-        self.sessions: dict[str, GameSession] = {}      # game_id → session
-        self.token_to_game: dict[str, str] = {}          # token → game_id
-        self.token_to_player: dict[str, int] = {}        # token → player index
-        self._queue: list[tuple[str, str]] = []          # [(token, username), ...]
+        self.sessions: dict[str, GameSession] = {}       # game_id → session
+        self.token_to_game: dict[str, str] = {}           # token → game_id
+        self.token_to_player: dict[str, int] = {}         # token → player index
 
-    # ── Matchmaking ───────────────────────────────────────────────────────────
+        self._pending: dict[str, PendingGame] = {}        # game_id → pending
+        self._token_pending: dict[str, str] = {}          # token → game_id
 
-    def enqueue(self, token: str, username: str) -> str | None:
+    # ── Lobby / game creation ─────────────────────────────────────────────────
+
+    def create_game(self, token: str, username: str) -> str:
+        # If token already has a pending game, cancel it first
+        self.cancel_pending(token)
+        game_id = str(uuid.uuid4())[:8].upper()
+        self._pending[game_id] = PendingGame(game_id, token, username)
+        self._token_pending[token] = game_id
+        return game_id
+
+    def join_game(self, token: str, username: str, game_id: str) -> tuple[bool, str]:
         """
-        Add player to the matchmaking queue.
-        Returns game_id immediately if another player was waiting, else None.
+        Returns (success, error_message).
+        On success the GameSession is created and both tokens are registered.
         """
-        if self._queue:
-            other_token, other_name = self._queue.pop(0)
-            game_id = str(uuid.uuid4())[:8]
-            game = BattleLineGame([other_name, username])
-            session = GameSession(game, [other_token, token], game_id)
-            self.sessions[game_id] = session
-            self.token_to_game[other_token] = game_id
-            self.token_to_game[token] = game_id
-            self.token_to_player[other_token] = 0
-            self.token_to_player[token] = 1
-            return game_id
+        pending = self._pending.get(game_id)
+        if not pending:
+            return False, "Game not found or already started."
+        if pending.token == token:
+            return False, "You cannot join your own game."
 
-        self._queue.append((token, username))
-        return None
+        self._pending.pop(game_id)
+        self._token_pending.pop(pending.token, None)
+
+        game = BattleLineGame([pending.username, username])
+        session = GameSession(game, [pending.token, token], game_id)
+        self.sessions[game_id] = session
+        self.token_to_game[pending.token] = game_id
+        self.token_to_game[token] = game_id
+        self.token_to_player[pending.token] = 0
+        self.token_to_player[token] = 1
+        return True, ""
+
+    def list_open_games(self) -> list[dict]:
+        return sorted(
+            [
+                {
+                    "game_id":    p.game_id,
+                    "creator":    p.username,
+                    "created_at": p.created_at,
+                }
+                for p in self._pending.values()
+            ],
+            key=lambda x: x["created_at"],
+        )
+
+    def is_pending(self, token: str) -> str | None:
+        return self._token_pending.get(token)
+
+    def cancel_pending(self, token: str) -> bool:
+        game_id = self._token_pending.pop(token, None)
+        if not game_id:
+            return False
+        self._pending.pop(game_id, None)
+        return True
+
+    # ── Session lookup ────────────────────────────────────────────────────────
 
     def get_session(self, token: str) -> tuple[GameSession, int] | None:
         game_id = self.token_to_game.get(token)
@@ -56,10 +102,6 @@ class GameManager:
     # ── Move application ──────────────────────────────────────────────────────
 
     def apply_move(self, token: str, move: dict) -> tuple[str, bool]:
-        """
-        Apply a player move.  Returns (message, success).
-        On success, game state has already been mutated.
-        """
         result = self.get_session(token)
         if not result:
             return "Not in a game.", False
@@ -70,7 +112,6 @@ class GameManager:
         if game.winner is not None:
             return "Game is already over.", False
 
-        # Scout return is an out-of-turn action for the same player
         is_scout_return = move.get("action") == "scout_return"
         if is_scout_return:
             if session.pending_scout != player_idx:
@@ -90,7 +131,6 @@ class GameManager:
             return str(e), False
 
     def _dispatch(self, session: GameSession, player: int, move: dict) -> tuple[str, bool]:
-        """Route move to the correct game method. Returns (message, needs_draw)."""
         game = session.game
         action = move.get("action")
 
@@ -115,7 +155,6 @@ class GameManager:
                 player, tactic, move["troop_count"], move["tactics_count"]
             )
             session.pending_scout = player
-            # Scout replaces the normal draw; turn advances after scout_return
             return f"Scout: revealed {len(revealed)} cards.", False
 
         if action == "scout_return":
