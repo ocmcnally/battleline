@@ -204,28 +204,32 @@ class Totem:
             return False
         ctw = self.cards_to_win
         rank = [None, None]
-        best = [None, None]
         for p in range(2):
             if len(self.sides[p]) == ctw:
                 rank[p] = evaluate_hand(self.sides[p], fog=self.fog)
-            best[p] = best_possible_hand(self.sides[p], available_cards,
-                                         cards_to_win=ctw, fog=self.fog)
 
+        # Fast path: neither side is full — claiming is impossible
+        if rank[0] is None and rank[1] is None:
+            return False
+
+        # Both sides full — direct comparison, no combinatorics needed
         if rank[0] is not None and rank[1] is not None:
             if rank[0] > rank[1]:
                 self.claimed = 0
-                return True
             elif rank[1] > rank[0]:
                 self.claimed = 1
-                return True
             else:
-                # ranks equal, claim for the last player (who just completed)
                 self.claimed = last_player
-                return True
-        if rank[0] is not None and (best[1] is None or rank[0] > best[1]):
-            self.claimed = 0; return True
-        if rank[1] is not None and (best[0] is None or rank[1] > best[0]):
-            self.claimed = 1; return True
+            return True
+
+        # Exactly one side full — only compute best_possible_hand for the incomplete side
+        full_p  = 0 if rank[0] is not None else 1
+        other_p = 1 - full_p
+        best_other = best_possible_hand(self.sides[other_p], available_cards,
+                                        cards_to_win=ctw, fog=self.fog)
+        if best_other is None or rank[full_p] > best_other:
+            self.claimed = full_p
+            return True
         return False
 
 
