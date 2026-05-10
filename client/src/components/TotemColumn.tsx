@@ -1,75 +1,165 @@
+import { useRef, useState } from "react";
 import type { TotemData, CardData } from "../types";
 import CardTile from "./CardTile";
 
-const EMPTY: React.CSSProperties = {
-  width: 44, height: 62, borderRadius: 6,
-  border: "1px dashed #2a2a4a", flexShrink: 0,
-};
+const CARD_W = 56;
+const CARD_H = 80;
+const POLE_H = 72; // height reserved for every totem slot (top/center/bottom)
 
-interface Props {
-  totem:    TotemData;
-  canPlay:  boolean;
-  onClick:  () => void;
+// ── Totem pole SVG ─────────────────────────────────────────────────────────────
+
+interface PoleProps {
+  n:          number;
+  canPlay?:   boolean;
+  isHovered?: boolean;
+  envLabel?:  string;
 }
 
-export default function TotemColumn({ totem, canPlay, onClick }: Props) {
-  const { my_cards, opp_cards, claimed_by, fog, mud, cards_to_win, index } = totem;
+function TotemPole({ n, canPlay, isHovered, envLabel }: PoleProps) {
+  const ringColor = isHovered ? "var(--claimed-me)" : "var(--accent)";
+  return (
+    <div style={{ position: "relative", width: CARD_W, height: POLE_H, flexShrink: 0 }}>
+      <svg viewBox="0 0 56 72" width={CARD_W} height={POLE_H}>
+        {/* Flat wooden base */}
+        <rect x="17" y="59" width="22" height="10" rx="3" fill="#6b3d14" />
+        {/* Pole */}
+        <rect x="25" y="6" width="6" height="57" rx="3" fill="#b06030" />
+        {/* Pole grain shadow */}
+        <rect x="27" y="6" width="2.5" height="57" rx="1.5" fill="#7a4020" opacity="0.45" />
+        {/* Red pennant */}
+        <polygon points="31,4 55,16 31,28" fill="#c83020" />
+        {/* Pennant highlight (upper triangle lighter) */}
+        <polygon points="31,4 55,16 31,16" fill="#e04030" opacity="0.35" />
+        {/* Totem number */}
+        <text
+          x="44" y="21"
+          textAnchor="middle" dominantBaseline="middle"
+          fill="white" fontSize="9" fontWeight="bold"
+          fontFamily="system-ui, sans-serif"
+        >
+          {n}
+        </text>
+      </svg>
 
-  // Opponent's row: slot nearest the totem is shown closest to the center
+      {/* Highlight ring — shown when card is selected (canPlay) or drag-hovering */}
+      {(canPlay || isHovered) && (
+        <div style={{
+          position: "absolute", inset: -3, borderRadius: 8, pointerEvents: "none",
+          border: `2.5px solid ${ringColor}`,
+          boxShadow: `0 0 8px ${ringColor}55`,
+        }} />
+      )}
+
+      {/* Fog / Mud badge */}
+      {envLabel && (
+        <div style={{
+          position: "absolute", bottom: 2, left: "50%", transform: "translateX(-50%)",
+          background: envLabel.includes("FOG") ? "#667788" : "#7a5010",
+          color: "#fff", fontSize: "0.45rem", fontWeight: 800,
+          padding: "1px 5px", borderRadius: 3, whiteSpace: "nowrap",
+        }}>
+          {envLabel}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Invisible spacer that reserves the same height as a TotemPole
+function PoleSpacer() {
+  return <div style={{ width: CARD_W, height: POLE_H, flexShrink: 0 }} />;
+}
+
+// ── Empty card slot ────────────────────────────────────────────────────────────
+
+const emptySlot = (highlight: boolean): React.CSSProperties => ({
+  width: CARD_W, height: CARD_H,
+  borderRadius: 7, flexShrink: 0,
+  border: highlight ? "2.5px solid var(--claimed-me)" : "1.5px dashed var(--surface2)",
+  background: highlight ? "rgba(74,140,64,0.12)" : "transparent",
+  boxShadow: highlight ? "0 0 10px rgba(74,140,64,0.3)" : "none",
+  transition: "border 0.1s, background 0.1s, box-shadow 0.1s",
+});
+
+// ── TotemColumn ────────────────────────────────────────────────────────────────
+
+interface Props {
+  totem:      TotemData;
+  canPlay:    boolean;
+  canDrop:    boolean;
+  isDragging: boolean;
+  onClick:    () => void;
+  onDrop:     () => void;
+}
+
+export default function TotemColumn({
+  totem, canPlay, canDrop, isDragging, onClick, onDrop,
+}: Props) {
+  const { my_cards, opp_cards, claimed_by, fog, mud, cards_to_win, index } = totem;
+  const [isHovered, setIsHovered] = useState(false);
+  const enterCount = useRef(0);
+
+  // Opponent slots: furthest-from-totem rendered at top
   const oppSlots: (CardData | null)[] = Array.from({ length: cards_to_win }, (_, i) =>
     opp_cards[cards_to_win - 1 - i] ?? null
   );
 
-  // My row: slot 0 nearest the totem
+  // My slots: nearest-to-totem first (upward)
   const mySlots: (CardData | null)[] = Array.from({ length: cards_to_win }, (_, i) =>
     my_cards[i] ?? null
   );
 
-  const markerBg =
-    claimed_by === "me"  ? "var(--claimed-me)"  :
-    claimed_by === "opp" ? "var(--claimed-opp)" :
-    "var(--surface2)";
+  const dropTargetSlot = my_cards.length;
+  const n = index + 1;
+  const envLabel = [fog && "FOG", mud && "MUD"].filter(Boolean).join(" · ") || undefined;
+  const showRing  = isHovered && canDrop;
 
-  const markerLabel =
-    claimed_by === "me"  ? "YOU" :
-    claimed_by === "opp" ? "OPP" :
-    [fog && "F", mud && "M"].filter(Boolean).join("") || String(index + 1);
+  // Fade columns that can't accept this drag
+  const columnOpacity = isDragging && !canDrop && claimed_by === null ? 0.4 : 1;
 
   return (
     <div
       style={{
-        display: "flex", flexDirection: "column", alignItems: "center", gap: 3,
+        display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
         cursor: canPlay ? "pointer" : "default",
+        opacity: columnOpacity,
+        transition: "opacity 0.15s",
       }}
-      onClick={canPlay ? onClick : undefined}
+      onClick={canPlay && !isDragging ? onClick : undefined}
+      onDragOver={(e) => { if (canDrop) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; } }}
+      onDragEnter={() => { enterCount.current++; if (canDrop) setIsHovered(true); }}
+      onDragLeave={() => { enterCount.current--; if (enterCount.current === 0) setIsHovered(false); }}
+      onDrop={(e) => { e.preventDefault(); enterCount.current = 0; setIsHovered(false); if (canDrop) onDrop(); }}
     >
-      {/* Opponent cards (far → near) */}
+      {/* ── Zone 1: top slot — totem appears here when claimed by opponent ── */}
+      {claimed_by === "opp"
+        ? <TotemPole n={n} />
+        : <PoleSpacer />}
+
+      {/* ── Zone 2: opponent's cards ── */}
       {oppSlots.map((card, i) =>
         card
-          ? <CardTile key={`opp-${i}`} card={card} small />
-          : <div key={`opp-e-${i}`} style={{ ...EMPTY, width: 36, height: 52 }} />
+          ? <CardTile key={`opp-${i}`} card={card} />
+          : <div key={`opp-e-${i}`} style={emptySlot(false)} />
       )}
 
-      {/* Totem marker */}
-      <div style={{
-        width: 44, height: 26,
-        borderRadius: 4,
-        background: markerBg,
-        border: canPlay ? "2px solid rgba(255,255,255,0.7)" : "1px solid transparent",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        fontSize: "0.6rem", fontWeight: 800, color: "#fff",
-        transition: "border 0.1s",
-        flexShrink: 0,
-      }}>
-        {markerLabel}
-      </div>
+      {/* ── Zone 3: center slot — totem lives here when unclaimed ── */}
+      {claimed_by === null
+        ? <TotemPole n={n} canPlay={canPlay} isHovered={showRing} envLabel={envLabel} />
+        : <PoleSpacer />}
 
-      {/* My cards (near → far) */}
-      {mySlots.map((card, i) =>
-        card
+      {/* ── Zone 4: my cards ── */}
+      {mySlots.map((card, i) => {
+        const isDropSlot = i === dropTargetSlot && showRing;
+        return card
           ? <CardTile key={`my-${i}`} card={card} />
-          : <div key={`my-e-${i}`} style={EMPTY} />
-      )}
+          : <div key={`my-e-${i}`} style={emptySlot(isDropSlot)} />;
+      })}
+
+      {/* ── Zone 5: bottom slot — totem moves here when claimed by me ── */}
+      {claimed_by === "me"
+        ? <TotemPole n={n} />
+        : <PoleSpacer />}
     </div>
   );
 }

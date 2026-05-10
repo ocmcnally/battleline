@@ -1,19 +1,21 @@
 :root {
-  --suit-blue:    #4a90d9;
-  --suit-red:     #e84040;
-  --suit-orange:  #f5a623;
-  --suit-yellow:  #d4a800;
-  --suit-green:   #4caf50;
-  --suit-purple:  #9b59b6;
+  /* ── Palette ── */
+  --bg:          #f7f2e8;   /* warm parchment */
+  --surface:     #ede6d4;   /* medium tan */
+  --surface2:    #d4c9b0;   /* borders, dividers */
+  --text:        #2e1e0e;   /* dark warm brown */
+  --text-dim:    #7a6650;   /* medium warm brown */
+  --accent:      #c96a2a;   /* warm orange */
+  --claimed-me:  #4a8c40;   /* sage green */
+  --claimed-opp: #b04038;   /* muted red */
 
-  --bg:           #1a1a2e;
-  --surface:      #16213e;
-  --surface2:     #0f3460;
-  --text:         #e0e0e0;
-  --text-dim:     #888;
-  --accent:       #e94560;
-  --claimed-me:   #4caf50;
-  --claimed-opp:  #e84040;
+  /* ── Suit colours (dark enough to read on cream cards) ── */
+  --suit-blue:   #1e5fa0;
+  --suit-red:    #b02828;
+  --suit-orange: #c05810;
+  --suit-yellow: #907200;
+  --suit-green:  #1e7020;
+  --suit-purple: #5828a0;
 
   font-family: system-ui, -apple-system, sans-serif;
   color: var(--text);
@@ -32,12 +34,8 @@ button {
   font-size: 1rem;
   transition: opacity 0.15s;
 }
-button:hover   { opacity: 0.85; }
+button:hover    { opacity: 0.82; }
 button:disabled { opacity: 0.4; cursor: not-allowed; }
 
-input {
-  outline: none;
-}
-input:focus {
-  border-color: var(--accent) !important;
-}
+input { outline: none; }
+input:focus { border-color: var(--accent) !important; }

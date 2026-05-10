@@ -4,60 +4,68 @@ import Board from "./Board";
 import Hand from "./Hand";
 
 interface Props {
-  state:   GameState;
-  gameId:  string;
-  onMove:  (move: object) => void;
-  error:   string | null;
+  state:  GameState;
+  gameId: string;
+  onMove: (move: object) => void;
+  error:  string | null;
 }
 
 export default function GameBoard({ state, onMove, error }: Props) {
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
+  const [draggedCard, setDraggedCard] = useState<CardData | null>(null);
 
   const selectedCard: CardData | null =
     selectedIdx !== null ? state.my_hand[selectedIdx] : null;
 
-  function handleCardSelect(idx: number) {
-    setSelectedIdx(prev => prev === idx ? null : idx);
-  }
+  // ── Validity checks ──────────────────────────────────────────────────────────
 
-  function canPlayTotem(totemIdx: number): boolean {
-    if (!state.my_turn || state.winner !== null) return false;
-    if (selectedCard === null) return false;
+  function canPlayTotem(totemIdx: number, withCard: CardData | null = selectedCard): boolean {
+    if (!state.my_turn || state.winner !== null || withCard === null) return false;
     const totem = state.totems[totemIdx];
     if (totem.claimed_by !== null) return false;
     if (totem.my_cards.length >= totem.cards_to_win) return false;
-    // Tactics cards need additional input — not yet wired up
-    if (selectedCard.type === "tactics") return false;
+    if (withCard.type === "tactics") return false;  // needs extra UI
     return true;
   }
 
-  function handleTotemClick(totemIdx: number) {
-    if (!selectedCard || !canPlayTotem(totemIdx)) return;
+  // ── Unified play action ──────────────────────────────────────────────────────
 
-    if (selectedCard.type === "troop") {
-      onMove({ action: "play_card", card: selectedCard, totem: totemIdx });
-      setSelectedIdx(null);
-      return;
-    }
+  function playCard(card: CardData, totemIdx: number) {
+    if (!canPlayTotem(totemIdx, card)) return;
 
-    if (selectedCard.type === "wild") {
+    if (card.type === "troop") {
+      onMove({ action: "play_card", card, totem: totemIdx });
+    } else if (card.type === "wild") {
       onMove({
         action: "play_wild",
-        tactic: { type: "tactics", name: selectedCard.tactic_name },
+        tactic: { type: "tactics", name: card.tactic_name },
         totem: totemIdx,
-        suit: selectedCard.suit,
-        value: selectedCard.value,
+        suit: card.suit,
+        value: card.value,
       });
-      setSelectedIdx(null);
     }
+    setSelectedIdx(null);
+    setDraggedCard(null);
   }
+
+  // ── Event handlers ───────────────────────────────────────────────────────────
+
+  function handleTotemClick(totemIdx: number) {
+    if (selectedCard) playCard(selectedCard, totemIdx);
+  }
+
+  function handleTotemDrop(totemIdx: number) {
+    if (draggedCard) playCard(draggedCard, totemIdx);
+  }
+
+  // ── Render ───────────────────────────────────────────────────────────────────
 
   const { names, my_totem_count, opp_totem_count, troop_deck_size, tactics_deck_size, my_turn, winner } = state;
 
   const turnLabel =
-    winner === "me"  ? "🎉 You won!" :
-    winner === "opp" ? "💀 You lost" :
-    my_turn          ? "Your turn"   :
+    winner === "me"  ? "You won!"        :
+    winner === "opp" ? "You lost"        :
+    my_turn          ? "Your turn"       :
     `${names.opp}'s turn…`;
 
   const turnColor =
@@ -66,59 +74,72 @@ export default function GameBoard({ state, onMove, error }: Props) {
     my_turn          ? "var(--claimed-me)"  :
     "var(--text-dim)";
 
+  const hintText = !my_turn
+    ? "Waiting for opponent…"
+    : draggedCard || selectedCard
+      ? "Drop on a totem to play"
+      : "Select or drag a card, then drop on a totem";
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: "var(--bg)" }}>
 
-      {/* ── Header bar ── */}
+      {/* Header */}
       <div style={{
         padding: "10px 20px", background: "var(--surface)",
+        borderBottom: "1.5px solid var(--surface2)",
         display: "flex", justifyContent: "space-between", alignItems: "center",
         flexShrink: 0, gap: 16,
       }}>
-        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-          <span style={{ fontWeight: 700, color: "var(--claimed-opp)" }}>
-            {names.opp} {opp_totem_count}
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <span style={{ fontWeight: 700, color: "var(--claimed-opp)", fontSize: "0.95rem" }}>
+            {names.opp} — {opp_totem_count}
           </span>
           <span style={{ color: "var(--text-dim)" }}>vs</span>
-          <span style={{ fontWeight: 700, color: "var(--claimed-me)" }}>
-            {my_totem_count} {names.me}
+          <span style={{ fontWeight: 700, color: "var(--claimed-me)", fontSize: "0.95rem" }}>
+            {my_totem_count} — {names.me}
           </span>
         </div>
 
         <span style={{ fontWeight: 700, color: turnColor }}>{turnLabel}</span>
 
         <div style={{ color: "var(--text-dim)", fontSize: "0.8rem", textAlign: "right" }}>
-          <span>Troop {troop_deck_size}</span>
-          <span style={{ margin: "0 6px" }}>·</span>
-          <span>Tactics {tactics_deck_size}</span>
+          Troop {troop_deck_size} · Tactics {tactics_deck_size}
         </div>
       </div>
 
-      {/* ── Error banner ── */}
+      {/* Error banner */}
       {error && (
         <div style={{
-          padding: "6px 20px", background: "#5c1a1a",
-          color: "#ff9999", fontSize: "0.85rem", flexShrink: 0,
+          padding: "6px 20px", background: "#7a2020",
+          color: "#ffd0d0", fontSize: "0.85rem", flexShrink: 0,
         }}>
           {error}
         </div>
       )}
 
-      {/* ── Board ── */}
+      {/* Board */}
       <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", overflow: "auto" }}>
         <Board
           totems={state.totems}
-          canPlayTotem={canPlayTotem}
+          canPlayTotem={(idx) => canPlayTotem(idx, selectedCard)}
+          canDropTotem={(idx) => canPlayTotem(idx, draggedCard)}
+          isDragging={draggedCard !== null}
           onTotemClick={handleTotemClick}
+          onTotemDrop={handleTotemDrop}
         />
       </div>
 
-      {/* ── Hand ── */}
-      <div style={{ padding: "8px 16px 20px", background: "var(--surface)", flexShrink: 0 }}>
-        <div style={{ color: "var(--text-dim)", fontSize: "0.75rem", marginBottom: 6, paddingLeft: 2 }}>
-          {my_turn ? "Select a card, then click a totem" : "Waiting for opponent…"}
+      {/* Hand */}
+      <div style={{
+        padding: "8px 16px 20px",
+        background: "var(--surface)",
+        borderTop: "1.5px solid var(--surface2)",
+        flexShrink: 0,
+      }}>
+        <div style={{ color: "var(--text-dim)", fontSize: "0.75rem", marginBottom: 8, paddingLeft: 2 }}>
+          {hintText}
           {selectedCard?.type === "tactics" && my_turn && (
-            <span style={{ color: "var(--suit-yellow)", marginLeft: 8 }}>
+            <span style={{ color: "var(--accent)", marginLeft: 8 }}>
               (tactics UI coming soon — click again to deselect)
             </span>
           )}
@@ -127,7 +148,9 @@ export default function GameBoard({ state, onMove, error }: Props) {
           cards={state.my_hand}
           selectedIdx={selectedIdx}
           myTurn={my_turn && winner === null}
-          onSelect={handleCardSelect}
+          onSelect={(idx) => setSelectedIdx(prev => prev === idx ? null : idx)}
+          onCardDragStart={(card) => { setDraggedCard(card); setSelectedIdx(null); }}
+          onDragEnd={() => setDraggedCard(null)}
         />
       </div>
 

@@ -14,47 +14,65 @@ const SUIT_SYMBOL: Record<string, string> = {
 };
 
 const TACTIC_COLOR: Record<string, string> = {
-  alexander: "#ffd700", darius:   "#c0a000",
-  wild8:     "#4a90d9", wild321:  "#9b59b6",
-  fog:       "#aaaaaa", mud:      "#8b6914",
-  scout:     "#4caf50", redeploy: "#f5a623",
-  traitor:   "#e84040", deserter: "#555555",
+  alexander: "#9a7000", darius:   "#7a5800",
+  wild8:     "#1e5fa0", wild321:  "#5828a0",
+  fog:       "#7a6650", mud:      "#7a5010",
+  scout:     "#1e7020", redeploy: "#c05810",
+  traitor:   "#b02828", deserter: "#7a6650",
 };
 
+const W = 56;
+const H = 80;
+
 interface Props {
-  card:      CardData;
-  selected?: boolean;
-  dimmed?:   boolean;
-  onClick?:  () => void;
-  small?:    boolean;
+  card:          CardData;
+  selected?:     boolean;
+  dimmed?:       boolean;
+  onClick?:      () => void;
+  draggable?:    boolean;
+  onDragStart?:  (e: React.DragEvent) => void;
+  onDragEnd?:    (e: React.DragEvent) => void;
 }
 
-export default function CardTile({ card, selected, dimmed, onClick, small }: Props) {
-  const w = small ? 36 : 44;
-  const h = small ? 52 : 62;
-
+export default function CardTile({
+  card, selected, dimmed, onClick,
+  draggable: isDraggable, onDragStart, onDragEnd,
+}: Props) {
   const base: React.CSSProperties = {
-    width: w, height: h,
-    borderRadius: 6,
+    width: W, height: H,
+    borderRadius: 7,
     display: "flex", flexDirection: "column",
     alignItems: "center", justifyContent: "center",
-    cursor: onClick ? "pointer" : "default",
+    cursor: isDraggable ? "grab" : onClick ? "pointer" : "default",
     userSelect: "none",
     flexShrink: 0,
     opacity: dimmed ? 0.35 : 1,
-    transition: "transform 0.1s, box-shadow 0.1s",
-    transform: selected ? "translateY(-8px)" : "none",
-    boxShadow: selected ? "0 6px 16px rgba(255,255,255,0.25)" : "none",
-    background: "var(--surface2)",
+    transition: "transform 0.1s, box-shadow 0.1s, opacity 0.15s",
+    transform: selected ? "translateY(-10px)" : "none",
+    boxShadow: selected
+      ? "0 6px 18px rgba(74,140,64,0.45)"
+      : "0 1px 3px rgba(0,0,0,0.12)",
+    background: "#fdf8f0",
   };
 
   if (card.type === "troop") {
-    const color  = SUIT_COLOR[card.suit]  ?? "#aaa";
+    const color  = SUIT_COLOR[card.suit]  ?? "#555";
     const symbol = SUIT_SYMBOL[card.suit] ?? "?";
     return (
-      <div style={{ ...base, border: selected ? "2px solid #fff" : "1px solid #444" }} onClick={onClick}>
-        <span style={{ color, fontSize: small ? "0.9rem" : "1.1rem" }}>{symbol}</span>
-        <span style={{ color, fontSize: small ? "0.65rem" : "0.75rem", fontWeight: 700, marginTop: 2 }}>
+      <div
+        style={{
+          ...base,
+          border: selected
+            ? "2px solid var(--claimed-me)"
+            : "1.5px solid var(--surface2)",
+        }}
+        onClick={onClick}
+        draggable={isDraggable}
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+      >
+        <span style={{ color, fontSize: "1.4rem", lineHeight: 1 }}>{symbol}</span>
+        <span style={{ color, fontSize: "1rem", fontWeight: 800, marginTop: 4 }}>
           {card.value}
         </span>
       </div>
@@ -62,29 +80,48 @@ export default function CardTile({ card, selected, dimmed, onClick, small }: Pro
   }
 
   if (card.type === "wild") {
-    const color  = SUIT_COLOR[card.suit]  ?? "#aaa";
+    const color  = SUIT_COLOR[card.suit]  ?? "#555";
     const symbol = SUIT_SYMBOL[card.suit] ?? "?";
     return (
-      <div style={{ ...base, border: selected ? "2px solid #fff" : "1px solid gold" }} onClick={onClick}>
-        <span style={{ color, fontSize: small ? "0.9rem" : "1rem" }}>{symbol}</span>
-        <span style={{ color, fontSize: small ? "0.6rem" : "0.7rem", fontWeight: 700 }}>{card.value}</span>
-        <span style={{ color: "gold", fontSize: "0.5rem" }}>★</span>
+      <div
+        style={{
+          ...base,
+          border: selected ? "2px solid var(--claimed-me)" : "1.5px solid #9a7000",
+          background: "#fffbf0",
+        }}
+        onClick={onClick}
+        draggable={isDraggable}
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+      >
+        <span style={{ color, fontSize: "1.2rem", lineHeight: 1 }}>{symbol}</span>
+        <span style={{ color, fontSize: "0.95rem", fontWeight: 800 }}>{card.value}</span>
+        <span style={{ color: "#9a7000", fontSize: "0.6rem", marginTop: 2 }}>wild</span>
       </div>
     );
   }
 
   // Tactics card
-  const tacColor = TACTIC_COLOR[card.name] ?? "#888";
+  const tacColor = TACTIC_COLOR[card.name] ?? "#666";
   return (
     <div
-      style={{ ...base, background: "#111827", border: selected ? "2px solid #fff" : `1px solid ${tacColor}` }}
+      style={{
+        ...base,
+        background: "#f5f0e4",
+        border: selected ? "2px solid var(--claimed-me)" : `1.5px solid ${tacColor}`,
+      }}
       onClick={onClick}
+      draggable={isDraggable}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
     >
       <span style={{
-        color: tacColor, fontSize: small ? "0.48rem" : "0.54rem",
-        textAlign: "center", lineHeight: 1.3, padding: "0 2px", fontWeight: 700,
+        color: tacColor, fontSize: "0.62rem",
+        textAlign: "center", lineHeight: 1.3,
+        padding: "0 4px", fontWeight: 800,
+        textTransform: "uppercase",
       }}>
-        {card.name.toUpperCase()}
+        {card.name}
       </span>
     </div>
   );
