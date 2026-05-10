@@ -2,9 +2,9 @@ import { useRef, useState } from "react";
 import type { TotemData, CardData } from "../types";
 import CardTile from "./CardTile";
 
-const CARD_W = 56;
-const CARD_H = 80;
-const POLE_H = 72; // height reserved for every totem slot (top/center/bottom)
+const CARD_W = 44;
+const CARD_H = 62;
+const POLE_H = 48; // height reserved for every totem slot (top/center/bottom)
 
 // ── Totem pole SVG ─────────────────────────────────────────────────────────────
 
@@ -83,17 +83,23 @@ const emptySlot = (highlight: boolean): React.CSSProperties => ({
 
 // ── TotemColumn ────────────────────────────────────────────────────────────────
 
+type BoardMode = "idle" | "redeploy_pick" | "redeploy_dest" | "traitor_pick" | "traitor_dest" | "deserter_pick";
+
 interface Props {
-  totem:      TotemData;
-  canPlay:    boolean;
-  canDrop:    boolean;
-  isDragging: boolean;
-  onClick:    () => void;
-  onDrop:     () => void;
+  totem:          TotemData;
+  canPlay:        boolean;
+  canDrop:        boolean;
+  isDragging:     boolean;
+  boardMode:      BoardMode;
+  onClick:        () => void;
+  onDrop:         () => void;
+  onMyCardClick?: (card: CardData) => void;
+  onOppCardClick?:(card: CardData) => void;
 }
 
 export default function TotemColumn({
-  totem, canPlay, canDrop, isDragging, onClick, onDrop,
+  totem, canPlay, canDrop, isDragging, boardMode,
+  onClick, onDrop, onMyCardClick, onOppCardClick,
 }: Props) {
   const { my_cards, opp_cards, claimed_by, fog, mud, cards_to_win, index } = totem;
   const [isHovered, setIsHovered] = useState(false);
@@ -114,13 +120,16 @@ export default function TotemColumn({
   const envLabel = [fog && "FOG", mud && "MUD"].filter(Boolean).join(" · ") || undefined;
   const showRing  = isHovered && canDrop;
 
+  const myCardsClickable  = boardMode === "redeploy_pick";
+  const oppCardsClickable = boardMode === "traitor_pick" || boardMode === "deserter_pick";
+
   // Fade columns that can't accept this drag
   const columnOpacity = isDragging && !canDrop && claimed_by === null ? 0.4 : 1;
 
   return (
     <div
       style={{
-        display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
+        display: "flex", flexDirection: "column", alignItems: "center", gap: 3,
         cursor: canPlay ? "pointer" : "default",
         opacity: columnOpacity,
         transition: "opacity 0.15s",
@@ -139,7 +148,11 @@ export default function TotemColumn({
       {/* ── Zone 2: opponent's cards ── */}
       {oppSlots.map((card, i) =>
         card
-          ? <CardTile key={`opp-${i}`} card={card} />
+          ? <CardTile
+              key={`opp-${i}`} card={card}
+              highlighted={oppCardsClickable}
+              onClick={oppCardsClickable ? () => onOppCardClick?.(card) : undefined}
+            />
           : <div key={`opp-e-${i}`} style={emptySlot(false)} />
       )}
 
@@ -152,7 +165,11 @@ export default function TotemColumn({
       {mySlots.map((card, i) => {
         const isDropSlot = i === dropTargetSlot && showRing;
         return card
-          ? <CardTile key={`my-${i}`} card={card} />
+          ? <CardTile
+              key={`my-${i}`} card={card}
+              highlighted={myCardsClickable}
+              onClick={myCardsClickable ? () => onMyCardClick?.(card) : undefined}
+            />
           : <div key={`my-e-${i}`} style={emptySlot(isDropSlot)} />;
       })}
 

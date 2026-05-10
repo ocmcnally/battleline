@@ -21,12 +21,13 @@ const TACTIC_COLOR: Record<string, string> = {
   traitor:   "#b02828", deserter: "#7a6650",
 };
 
-const W = 56;
-const H = 80;
+const W = 44;
+const H = 62;
 
 interface Props {
   card:          CardData;
   selected?:     boolean;
+  highlighted?:  boolean;
   dimmed?:       boolean;
   onClick?:      () => void;
   draggable?:    boolean;
@@ -35,7 +36,7 @@ interface Props {
 }
 
 export default function CardTile({
-  card, selected, dimmed, onClick,
+  card, selected, highlighted, dimmed, onClick,
   draggable: isDraggable, onDragStart, onDragEnd,
 }: Props) {
   const base: React.CSSProperties = {
@@ -51,7 +52,9 @@ export default function CardTile({
     transform: selected ? "translateY(-10px)" : "none",
     boxShadow: selected
       ? "0 6px 18px rgba(74,140,64,0.45)"
-      : "0 1px 3px rgba(0,0,0,0.12)",
+      : highlighted
+        ? "0 0 10px rgba(201,106,42,0.55)"
+        : "0 1px 3px rgba(0,0,0,0.12)",
     background: "#fdf8f0",
   };
 
@@ -64,15 +67,17 @@ export default function CardTile({
           ...base,
           border: selected
             ? "2px solid var(--claimed-me)"
-            : "1.5px solid var(--surface2)",
+            : highlighted
+              ? "2px solid var(--accent)"
+              : "1.5px solid var(--surface2)",
         }}
         onClick={onClick}
         draggable={isDraggable}
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
       >
-        <span style={{ color, fontSize: "1.4rem", lineHeight: 1 }}>{symbol}</span>
-        <span style={{ color, fontSize: "1rem", fontWeight: 800, marginTop: 4 }}>
+        <span style={{ color, fontSize: "1.1rem", lineHeight: 1 }}>{symbol}</span>
+        <span style={{ color, fontSize: "0.85rem", fontWeight: 800, marginTop: 3 }}>
           {card.value}
         </span>
       </div>
@@ -86,7 +91,7 @@ export default function CardTile({
       <div
         style={{
           ...base,
-          border: selected ? "2px solid var(--claimed-me)" : "1.5px solid #9a7000",
+          border: selected ? "2px solid var(--claimed-me)" : highlighted ? "2px solid var(--accent)" : "1.5px solid #9a7000",
           background: "#fffbf0",
         }}
         onClick={onClick}
@@ -94,8 +99,8 @@ export default function CardTile({
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
       >
-        <span style={{ color, fontSize: "1.2rem", lineHeight: 1 }}>{symbol}</span>
-        <span style={{ color, fontSize: "0.95rem", fontWeight: 800 }}>{card.value}</span>
+        <span style={{ color, fontSize: "1rem", lineHeight: 1 }}>{symbol}</span>
+        <span style={{ color, fontSize: "0.82rem", fontWeight: 800 }}>{card.value}</span>
         <span style={{ color: "#9a7000", fontSize: "0.6rem", marginTop: 2 }}>wild</span>
       </div>
     );
@@ -108,7 +113,7 @@ export default function CardTile({
       style={{
         ...base,
         background: "#f5f0e4",
-        border: selected ? "2px solid var(--claimed-me)" : `1.5px solid ${tacColor}`,
+        border: selected ? "2px solid var(--claimed-me)" : highlighted ? "2px solid var(--accent)" : `1.5px solid ${tacColor}`,
       }}
       onClick={onClick}
       draggable={isDraggable}
