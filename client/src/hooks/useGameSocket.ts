@@ -16,7 +16,8 @@ export function useGameSocket(token: string | null) {
       return;
     }
 
-    const ws = new WebSocket(`ws://${location.host}/ws?token=${token}`);
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    const ws = new WebSocket(`${proto}://${location.host}/ws?token=${token}`);
     wsRef.current = ws;
     setStatus("connecting");
 

@@ -28,8 +28,10 @@ Client → Server
   { action:"ping" }
 """
 
+import os
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .game_manager import GameManager
@@ -141,3 +143,9 @@ async def ws_endpoint(ws: WebSocket, token: str = Query(...)):
 
     except WebSocketDisconnect:
         cm.disconnect(token)
+
+
+# Serve React build — must be mounted after all API/WS routes
+_dist = os.path.join(os.path.dirname(__file__), "..", "client", "dist")
+if os.path.isdir(_dist):
+    app.mount("/", StaticFiles(directory=_dist, html=True), name="spa")
