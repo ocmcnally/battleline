@@ -334,6 +334,7 @@ export default function GameBoard({ state, onMove, error }: Props) {
           totems={state.totems}
           troopDeckSize={troop_deck_size}
           tacticsDeckSize={tactics_deck_size}
+          discarded={state.discarded}
           canPlayTotem={canPlayTotemForBoard}
           canDropTotem={canDropTotemForBoard}
           isDragging={draggedCard !== null}

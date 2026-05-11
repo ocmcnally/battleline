@@ -1,0 +1,9 @@
+# Environment files — never commit credentials
+client/.env.local
+.env
+.env.local
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+client/dist/

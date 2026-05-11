@@ -1,5 +1,6 @@
 import type { TotemData, CardData } from "../types";
 import TotemColumn from "./TotemColumn";
+import DiscardPile from "./DiscardPile";
 
 type BoardMode = "idle" | "redeploy_pick" | "redeploy_dest" | "traitor_pick" | "traitor_dest" | "deserter_pick";
 
@@ -54,6 +55,7 @@ interface Props {
   totems:          TotemData[];
   troopDeckSize:   number;
   tacticsDeckSize: number;
+  discarded:       CardData[];
   canPlayTotem:    (idx: number) => boolean;
   canDropTotem:    (idx: number) => boolean;
   isDragging:      boolean;
@@ -68,7 +70,7 @@ interface Props {
 }
 
 export default function Board({
-  totems, troopDeckSize, tacticsDeckSize,
+  totems, troopDeckSize, tacticsDeckSize, discarded,
   canPlayTotem, canDropTotem, isDragging,
   isDrawPhase, boardMode,
   onTotemClick, onTotemDrop,
@@ -86,6 +88,8 @@ export default function Board({
         isDrawPhase={isDrawPhase}
         onClick={onDrawTactics}
       />
+
+      <DiscardPile cards={discarded} />
 
       {totems.map((t) => (
         <TotemColumn

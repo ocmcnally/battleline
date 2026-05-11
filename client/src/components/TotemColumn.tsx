@@ -9,13 +9,12 @@ const POLE_H = 48; // height reserved for every totem slot (top/center/bottom)
 // ── Totem pole SVG ─────────────────────────────────────────────────────────────
 
 interface PoleProps {
-  n:          number;
   canPlay?:   boolean;
   isHovered?: boolean;
   envLabel?:  string;
 }
 
-function TotemPole({ n, canPlay, isHovered, envLabel }: PoleProps) {
+function TotemPole({ canPlay, isHovered, envLabel }: PoleProps) {
   const ringColor = isHovered ? "var(--claimed-me)" : "var(--accent)";
   return (
     <div style={{ position: "relative", width: CARD_W, height: POLE_H, flexShrink: 0 }}>
@@ -30,15 +29,6 @@ function TotemPole({ n, canPlay, isHovered, envLabel }: PoleProps) {
         <polygon points="31,4 55,16 31,28" fill="#c83020" />
         {/* Pennant highlight (upper triangle lighter) */}
         <polygon points="31,4 55,16 31,16" fill="#e04030" opacity="0.35" />
-        {/* Totem number */}
-        <text
-          x="44" y="21"
-          textAnchor="middle" dominantBaseline="middle"
-          fill="white" fontSize="9" fontWeight="bold"
-          fontFamily="system-ui, sans-serif"
-        >
-          {n}
-        </text>
       </svg>
 
       {/* Highlight ring — shown when card is selected (canPlay) or drag-hovering */}
@@ -101,7 +91,7 @@ export default function TotemColumn({
   totem, canPlay, canDrop, isDragging, boardMode,
   onClick, onDrop, onMyCardClick, onOppCardClick,
 }: Props) {
-  const { my_cards, opp_cards, claimed_by, fog, mud, cards_to_win, index } = totem;
+  const { my_cards, opp_cards, claimed_by, fog, mud, cards_to_win } = totem;
   const [isHovered, setIsHovered] = useState(false);
   const enterCount = useRef(0);
 
@@ -116,7 +106,6 @@ export default function TotemColumn({
   );
 
   const dropTargetSlot = my_cards.length;
-  const n = index + 1;
   const envLabel = [fog && "FOG", mud && "MUD"].filter(Boolean).join(" · ") || undefined;
   const showRing  = isHovered && canDrop;
 
@@ -142,7 +131,7 @@ export default function TotemColumn({
     >
       {/* ── Zone 1: top slot — totem appears here when claimed by opponent ── */}
       {claimed_by === "opp"
-        ? <TotemPole n={n} />
+        ? <TotemPole />
         : <PoleSpacer />}
 
       {/* ── Zone 2: opponent's cards ── */}
@@ -158,7 +147,7 @@ export default function TotemColumn({
 
       {/* ── Zone 3: center slot — totem lives here when unclaimed ── */}
       {claimed_by === null
-        ? <TotemPole n={n} canPlay={canPlay} isHovered={showRing} envLabel={envLabel} />
+        ? <TotemPole canPlay={canPlay} isHovered={showRing} envLabel={envLabel} />
         : <PoleSpacer />}
 
       {/* ── Zone 4: my cards ── */}
@@ -175,7 +164,7 @@ export default function TotemColumn({
 
       {/* ── Zone 5: bottom slot — totem moves here when claimed by me ── */}
       {claimed_by === "me"
-        ? <TotemPole n={n} />
+        ? <TotemPole />
         : <PoleSpacer />}
     </div>
   );
