@@ -82,18 +82,23 @@ export default function GameBoard({ state, onMove, error }: Props) {
 
   // ── Send helpers ───────────────────────────────────────────────────────────
 
+  // sendMove owns all cleanup — callers must NOT call resetSelection() after this
   function sendMove(move: object) {
     const action = (move as any).action as string;
     const needsDraw = !["scout_reveal", "scout_return"].includes(action);
-    if (!needsDraw) { onMove(move); return; }
+
+    setSelectedIdx(null);
+    setDraggedCard(null);
+
+    if (!needsDraw) { onMove(move); setPhase({ kind: "idle" }); return; }
 
     const { troop_deck_size, tactics_deck_size } = state;
     if (troop_deck_size === 0 && tactics_deck_size === 0) {
-      onMove({ ...move, draw_from_tactics: false });
+      onMove({ ...move, draw_from_tactics: false }); setPhase({ kind: "idle" });
     } else if (troop_deck_size === 0) {
-      onMove({ ...move, draw_from_tactics: true });
+      onMove({ ...move, draw_from_tactics: true });  setPhase({ kind: "idle" });
     } else if (tactics_deck_size === 0) {
-      onMove({ ...move, draw_from_tactics: false });
+      onMove({ ...move, draw_from_tactics: false }); setPhase({ kind: "idle" });
     } else {
       setPhase({ kind: "draw", pendingMove: move });
     }
@@ -119,19 +124,20 @@ export default function GameBoard({ state, onMove, error }: Props) {
         value: card.value,
       });
     }
-    resetSelection();
+    // sendMove handles cleanup
   }
 
   function playTacticsOnTotem(card: TacticsCard, totemIdx: number) {
     if (WILD_TACTICS.has(card.name)) {
       setPhase({ kind: "wild_pick", tactic: card, totemIdx });
+      setSelectedIdx(null);
     } else if (ENV_TACTICS.has(card.name)) {
       sendMove({
         action: "play_environment",
         tactic: { type: "tactics", name: card.name },
         totem: totemIdx,
       });
-      resetSelection();
+      // sendMove handles cleanup
     }
   }
 
@@ -152,7 +158,6 @@ export default function GameBoard({ state, onMove, error }: Props) {
         from_totem: phase.fromTotem,
         to_totem: totemIdx,
       });
-      resetSelection();
     } else if (phase.kind === "traitor_dest") {
       if (!canPickDest(totemIdx)) return;
       sendMove({
@@ -162,7 +167,6 @@ export default function GameBoard({ state, onMove, error }: Props) {
         from_totem: phase.fromTotem,
         to_totem: totemIdx,
       });
-      resetSelection();
     }
   }
 
@@ -216,7 +220,6 @@ export default function GameBoard({ state, onMove, error }: Props) {
         card,
         from_totem: totemIdx,
       });
-      resetSelection();
     }
   }
 
@@ -371,7 +374,6 @@ export default function GameBoard({ state, onMove, error }: Props) {
                 from_totem: phase.fromTotem,
                 to_totem: null,
               });
-              resetSelection();
             }}
             style={{
               borderRadius: 6, fontWeight: 700, padding: "5px 16px", fontSize: "0.8rem",
@@ -428,7 +430,6 @@ export default function GameBoard({ state, onMove, error }: Props) {
               suit,
               value,
             });
-            resetSelection();
           }}
           onCancel={resetSelection}
         />
