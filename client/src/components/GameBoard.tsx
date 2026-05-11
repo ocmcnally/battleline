@@ -1,8 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { GameState, CardData, TacticsCard } from "../types";
 import Board from "./Board";
 import Hand from "./Hand";
-import WildModal from "./WildModal";
 import { ScoutSplitModal, ScoutReturnModal } from "./ScoutModal";
 
 // ── Phase machine ─────────────────────────────────────────────────────────────
@@ -12,7 +11,6 @@ type BoardMode = "idle" | "redeploy_pick" | "redeploy_dest" | "traitor_pick" | "
 type Phase =
   | { kind: "idle" }
   | { kind: "draw"; pendingMove: object }
-  | { kind: "wild_pick"; tactic: TacticsCard; totemIdx: number }
   | { kind: "scout_split"; tactic: TacticsCard }
   | { kind: "scout_return" }
   | { kind: "redeploy_pick"; tactic: TacticsCard }
@@ -37,6 +35,7 @@ export default function GameBoard({ state, onMove, error }: Props) {
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
   const [draggedCard, setDraggedCard] = useState<CardData | null>(null);
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
+  const preScoutHand = useRef<CardData[]>([]);
 
   const selectedCard: CardData | null =
     selectedIdx !== null ? state.my_hand[selectedIdx] : null;
@@ -63,13 +62,23 @@ export default function GameBoard({ state, onMove, error }: Props) {
     return state.totems[totemIdx].claimed_by === null;
   }
 
+  function isLeaderBlocked(cardName: string): boolean {
+    const LEADERS = new Set(["alexander", "darius"]);
+    if (!LEADERS.has(cardName)) return false;
+    const other = cardName === "alexander" ? "darius" : "alexander";
+    return state.leaders_in_play.includes(other);
+  }
+
   function canTargetTotem(totemIdx: number, card: CardData | null): boolean {
     if (!state.my_turn || state.winner !== null || card === null) return false;
     if (phase.kind !== "idle") return false;
     if (card.type === "troop" || card.type === "wild") return totemHasSpace(totemIdx);
     if (card.type === "tactics") {
       if (!canPlayTacticsCard()) return false;
-      if (WILD_TACTICS.has(card.name)) return totemHasSpace(totemIdx);
+      if (WILD_TACTICS.has(card.name)) {
+        if (isLeaderBlocked(card.name)) return false;
+        return totemHasSpace(totemIdx);
+      }
       if (ENV_TACTICS.has(card.name))  return totemIsUnclaimed(totemIdx);
     }
     return false;
@@ -129,15 +138,17 @@ export default function GameBoard({ state, onMove, error }: Props) {
 
   function playTacticsOnTotem(card: TacticsCard, totemIdx: number) {
     if (WILD_TACTICS.has(card.name)) {
-      setPhase({ kind: "wild_pick", tactic: card, totemIdx });
-      setSelectedIdx(null);
+      sendMove({
+        action: "play_wild",
+        tactic: { type: "tactics", name: card.name },
+        totem: totemIdx,
+      });
     } else if (ENV_TACTICS.has(card.name)) {
       sendMove({
         action: "play_environment",
         tactic: { type: "tactics", name: card.name },
         totem: totemIdx,
       });
-      // sendMove handles cleanup
     }
   }
 
@@ -249,7 +260,6 @@ export default function GameBoard({ state, onMove, error }: Props) {
     if (!state.my_turn || state.winner !== null) return "Waiting for opponent…";
     switch (phase.kind) {
       case "draw":          return "Draw a card — click Troops or Tactics deck";
-      case "wild_pick":     return "Assign suit & value";
       case "scout_split":   return "Scout: choose how many to draw from each deck";
       case "scout_return":  return "Scout: return 2 cards from your hand";
       case "redeploy_pick": return "Redeploy: click one of your board cards to move";
@@ -404,6 +414,12 @@ export default function GameBoard({ state, onMove, error }: Props) {
               (opponent must play a tactic first)
             </span>
           )}
+          {phase.kind === "idle" && selectedCard?.type === "tactics" &&
+           isLeaderBlocked(selectedCard.name) && (
+            <span style={{ color: "var(--claimed-opp)", marginLeft: 8 }}>
+              (can't play both Alexander and Darius)
+            </span>
+          )}
         </div>
         <Hand
           cards={state.my_hand}
@@ -419,29 +435,13 @@ export default function GameBoard({ state, onMove, error }: Props) {
         />
       </div>
 
-      {/* Wild card modal */}
-      {phase.kind === "wild_pick" && (
-        <WildModal
-          tactic={phase.tactic}
-          onConfirm={(suit, value) => {
-            sendMove({
-              action: "play_wild",
-              tactic: { type: "tactics", name: phase.tactic.name },
-              totem: phase.totemIdx,
-              suit,
-              value,
-            });
-          }}
-          onCancel={resetSelection}
-        />
-      )}
-
       {/* Scout split modal */}
       {phase.kind === "scout_split" && (
         <ScoutSplitModal
           troopDeckSize={troop_deck_size}
           tacticsDeckSize={tactics_deck_size}
           onConfirm={(troop_count, tactics_count) => {
+            preScoutHand.current = [...state.my_hand];
             onMove({
               action: "scout_reveal",
               tactic: { type: "tactics", name: "scout" },
@@ -459,7 +459,12 @@ export default function GameBoard({ state, onMove, error }: Props) {
       {phase.kind === "scout_return" && (
         <ScoutReturnModal
           hand={state.my_hand}
-          onConfirm={(returns) => {
+          preHand={preScoutHand.current}
+          onConfirm={(cards) => {
+            const returns = cards.map(card => ({
+              card,
+              dest: card.type === "troop" ? "troop" : "tactics",
+            }));
             onMove({ action: "scout_return", returns });
             resetSelection();
           }}

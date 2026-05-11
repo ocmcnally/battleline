@@ -7,7 +7,7 @@ Win 5 totems OR 3 consecutive totems.
 """
 
 import random
-from itertools import combinations
+from itertools import combinations, product
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -99,6 +99,22 @@ class WildCard(Card):
         return hash(("wild", self.tactic_name, self.suit, self.value))
 
 
+class UnassignedWild(Card):
+    """A wild tactics card on a totem whose suit/value is determined when the totem is claimed."""
+    def __init__(self, tactic_name: str):
+        super().__init__(SUITS[0], 0)  # placeholder; ignored for evaluation
+        self.tactic_name = tactic_name
+
+    def __repr__(self):
+        return f"[{self.tactic_name.upper()[:5]}?]"
+
+    def __eq__(self, other):
+        return isinstance(other, UnassignedWild) and self.tactic_name == other.tactic_name
+
+    def __hash__(self):
+        return hash(("unassigned_wild", self.tactic_name))
+
+
 class TacticsCard:
     """A tactics card held in a player's hand."""
     def __init__(self, name: str):
@@ -135,7 +151,7 @@ def evaluate_hand(cards: list[Card], fog: bool = False) -> tuple:
     n         = len(cards)
 
     if fog:
-        return (HIGH_SUM, total, *values)
+        return (HIGH_SUM, total)
 
     suits     = [c.suit for c in cards]
     same_suit = len(set(suits)) == 1
@@ -163,6 +179,65 @@ def best_possible_hand(played: list[Card], available: list[Card],
         h = evaluate_hand(list(played) + list(combo), fog=fog)
         if best is None or h > best:
             best = h
+    return best
+
+
+def _wild_options(tactic_name: str) -> list[tuple[str, int]]:
+    """Return all valid (suit, value) pairs for an UnassignedWild."""
+    if tactic_name == "wild8":
+        return [(s, 8) for s in SUITS]
+    if tactic_name == "wild321":
+        return [(s, v) for s in SUITS for v in (1, 2, 3)]
+    return [(s, v) for s in SUITS for v in range(1, 11)]  # alexander, darius
+
+
+def evaluate_side_best(cards: list, fog: bool = False) -> tuple[tuple, list[tuple]]:
+    """
+    Find best hand achievable by optimally assigning any UnassignedWilds.
+    Returns (best_rank, [(suit, value), ...] one per UnassignedWild in order).
+    """
+    fixed = [c for c in cards if not isinstance(c, UnassignedWild)]
+    wilds = [c for c in cards if isinstance(c, UnassignedWild)]
+    if not wilds:
+        return evaluate_hand(fixed, fog=fog), []
+    best_rank, best_assign = None, []
+    for combo in product(*[_wild_options(w.tactic_name) for w in wilds]):
+        hand = fixed + [Card(s, v) for s, v in combo]
+        rank = evaluate_hand(hand, fog=fog)
+        if best_rank is None or rank > best_rank:
+            best_rank, best_assign = rank, list(combo)
+    return best_rank, best_assign
+
+
+def best_possible_with_wilds(placed: list, available: list[Card],
+                              cards_to_win: int = CARDS_TO_WIN,
+                              fog: bool = False) -> tuple | None:
+    """
+    Best achievable rank for an incomplete side, accounting for UnassignedWilds already placed.
+    """
+    needed = cards_to_win - len(placed)
+    if needed <= 0:
+        rank, _ = evaluate_side_best(placed, fog=fog)
+        return rank
+    fixed = [c for c in placed if not isinstance(c, UnassignedWild)]
+    wilds = [c for c in placed if isinstance(c, UnassignedWild)]
+    candidates = [c for c in available if c not in fixed]
+    if len(candidates) < needed:
+        return None
+    best = None
+    if not wilds:
+        for combo in combinations(candidates, needed):
+            rank = evaluate_hand(fixed + list(combo), fog=fog)
+            if best is None or rank > best:
+                best = rank
+    else:
+        wild_choices = [_wild_options(w.tactic_name) for w in wilds]
+        for combo in combinations(candidates, needed):
+            base = fixed + list(combo)
+            for wild_combo in product(*wild_choices):
+                rank = evaluate_hand(base + [Card(s, v) for s, v in wild_combo], fog=fog)
+                if best is None or rank > best:
+                    best = rank
     return best
 
 
@@ -203,34 +278,44 @@ class Totem:
         if self.claimed is not None:
             return False
         ctw = self.cards_to_win
-        rank = [None, None]
+        rank   = [None, None]
+        assign = [None, None]
         for p in range(2):
             if len(self.sides[p]) == ctw:
-                rank[p] = evaluate_hand(self.sides[p], fog=self.fog)
+                rank[p], assign[p] = evaluate_side_best(self.sides[p], fog=self.fog)
 
-        # Fast path: neither side is full — claiming is impossible
         if rank[0] is None and rank[1] is None:
             return False
 
-        # Both sides full — direct comparison, no combinatorics needed
         if rank[0] is not None and rank[1] is not None:
-            if rank[0] > rank[1]:
-                self.claimed = 0
-            elif rank[1] > rank[0]:
-                self.claimed = 1
-            else:
-                self.claimed = last_player
+            if rank[0] > rank[1]:   winner = 0
+            elif rank[1] > rank[0]: winner = 1
+            else:                   winner = last_player
+            self._apply_wild_assignments(0, assign[0])
+            self._apply_wild_assignments(1, assign[1])
+            self.claimed = winner
             return True
 
-        # Exactly one side full — only compute best_possible_hand for the incomplete side
         full_p  = 0 if rank[0] is not None else 1
         other_p = 1 - full_p
-        best_other = best_possible_hand(self.sides[other_p], available_cards,
-                                        cards_to_win=ctw, fog=self.fog)
-        if best_other is None or rank[full_p] > best_other:
+        best_other = best_possible_with_wilds(self.sides[other_p], available_cards,
+                                              cards_to_win=ctw, fog=self.fog)
+        can_claim = rank[full_p] >= best_other 
+        if best_other is None or can_claim:
+            self._apply_wild_assignments(full_p, assign[full_p])
             self.claimed = full_p
             return True
         return False
+
+    def _apply_wild_assignments(self, player: int, assignments: list[tuple] | None):
+        if not assignments:
+            return
+        j = 0
+        for i, card in enumerate(self.sides[player]):
+            if isinstance(card, UnassignedWild):
+                suit, value = assignments[j]
+                self.sides[player][i] = WildCard(card.tactic_name, suit, value)
+                j += 1
 
 
 # ─── Game ─────────────────────────────────────────────────────────────────────
@@ -279,9 +364,9 @@ class BattleLineGame:
     def _unplayed_cards(self) -> list[Card]:
         """Troop cards not on any totem and not discarded (used for claim evaluation)."""
         played_troop  = {c for c in self._all_played_cards()
-                         if isinstance(c, Card) and not isinstance(c, WildCard)}
+                         if isinstance(c, Card) and not isinstance(c, (WildCard, UnassignedWild))}
         disc_troop    = {c for c in self.discarded
-                         if isinstance(c, Card) and not isinstance(c, WildCard)}
+                         if isinstance(c, Card) and not isinstance(c, (WildCard, UnassignedWild))}
         excluded      = played_troop | disc_troop
         return [Card(s, v) for s in SUITS for v in range(1, 11)
                 if Card(s, v) not in excluded]
@@ -370,6 +455,34 @@ class BattleLineGame:
         self.winner = self.get_winner()
         name = tactic.name.capitalize()
         return (f"{self.names[player]} played {name} as {suit} {value} "
+                f"on totem {totem_index + 1}." + self._claim_msg(newly))
+
+    def play_unassigned_wild(self, player: int, tactic: TacticsCard, totem_index: int) -> str:
+        """Play a wild tactics card without declaring suit/value (resolved at claim time)."""
+        if tactic not in self.hands[player]:
+            raise ValueError("Card not in hand.")
+        if not self.can_play_tactics(player):
+            raise ValueError("Can't play tactics: you're already 1 ahead of opponent.")
+        if tactic.is_leader:
+            other = LEADERS - {tactic.name}
+            if any(l in self.leaders_in_play for l in other):
+                raise ValueError("Cannot play both Alexander and Darius.")
+        totem = self.totems[totem_index]
+        if totem.claimed is not None:
+            raise ValueError(f"Totem {totem_index + 1} is already claimed.")
+        if totem.is_full(player):
+            raise ValueError(f"Your side of totem {totem_index + 1} is full.")
+
+        self.hands[player].remove(tactic)
+        totem.play_card(player, UnassignedWild(tactic.name))
+        self.tactics_played[player] += 1
+        if tactic.is_leader:
+            self.leaders_in_play.add(tactic.name)
+
+        newly = self._check_claims(player)
+        self.winner = self.get_winner()
+        name = tactic.name.capitalize()
+        return (f"{self.names[player]} played {name} (undeclared) "
                 f"on totem {totem_index + 1}." + self._claim_msg(newly))
 
     # ── Environment tactics ───────────────────────────────────────────────────

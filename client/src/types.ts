@@ -2,7 +2,7 @@
 
 export type TroopCard   = { type: "troop";   suit: string; value: number };
 export type TacticsCard = { type: "tactics"; name: string };
-export type WildCard    = { type: "wild";    tactic_name: string; suit: string; value: number };
+export type WildCard    = { type: "wild";    tactic_name: string; suit: string | null; value: number | null };
 export type CardData    = TroopCard | TacticsCard | WildCard;
 
 // ── Game state ────────────────────────────────────────────────────────────────

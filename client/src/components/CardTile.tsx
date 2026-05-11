@@ -85,8 +85,12 @@ export default function CardTile({
   }
 
   if (card.type === "wild") {
-    const color  = SUIT_COLOR[card.suit]  ?? "#555";
-    const symbol = SUIT_SYMBOL[card.suit] ?? "?";
+    const isAssigned = card.suit !== null && card.value !== null;
+    const color  = isAssigned ? (SUIT_COLOR[card.suit!]  ?? "#555") : "#9a7000";
+    const symbol = isAssigned ? (SUIT_SYMBOL[card.suit!] ?? "?")    : "?";
+    const label  = card.tactic_name === "wild8"   ? "×8"
+                 : card.tactic_name === "wild321" ? "1-3"
+                 : card.tactic_name.slice(0, 4).toUpperCase();
     return (
       <div
         style={{
@@ -99,8 +103,11 @@ export default function CardTile({
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
       >
-        <span style={{ color, fontSize: "1rem", lineHeight: 1 }}>{symbol}</span>
-        <span style={{ color, fontSize: "0.82rem", fontWeight: 800 }}>{card.value}</span>
+        <span style={{ color, fontSize: isAssigned ? "1rem" : "0.65rem", lineHeight: 1, fontWeight: 800 }}>{symbol}</span>
+        {isAssigned
+          ? <span style={{ color, fontSize: "0.82rem", fontWeight: 800 }}>{card.value}</span>
+          : <span style={{ color: "#9a7000", fontSize: "0.6rem", fontWeight: 800 }}>{label}</span>
+        }
         <span style={{ color: "#9a7000", fontSize: "0.6rem", marginTop: 2 }}>wild</span>
       </div>
     );

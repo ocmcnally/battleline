@@ -2,7 +2,58 @@ import { useState } from "react";
 import type { CardData } from "../types";
 import CardTile from "./CardTile";
 
-// ── Phase 1: choose how many cards to draw ────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function cardKey(c: CardData): string {
+  if (c.type === "troop")  return `troop:${c.suit}:${c.value}`;
+  if (c.type === "wild")   return `wild:${c.tactic_name}:${c.suit}:${c.value}`;
+  return `tactics:${c.name}`;
+}
+
+// Returns cards in `after` that are not present in `before` (bag-style diff).
+export function diffHands(before: CardData[], after: CardData[]): CardData[] {
+  const pool = new Map<string, number>();
+  for (const c of before) {
+    const k = cardKey(c);
+    pool.set(k, (pool.get(k) ?? 0) + 1);
+  }
+  const result: CardData[] = [];
+  for (const c of after) {
+    const k = cardKey(c);
+    const n = pool.get(k) ?? 0;
+    if (n > 0) { pool.set(k, n - 1); }
+    else        { result.push(c); }
+  }
+  return result;
+}
+
+function autoDest(c: CardData): "troop" | "tactics" {
+  return c.type === "troop" ? "troop" : "tactics";
+}
+
+const MODAL: React.CSSProperties = {
+  position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 100,
+  display: "flex", alignItems: "center", justifyContent: "center",
+};
+const PANEL: React.CSSProperties = {
+  background: "var(--surface)", borderRadius: 12, padding: "22px 28px",
+  border: "1.5px solid var(--surface2)", boxShadow: "0 8px 32px rgba(0,0,0,0.25)",
+};
+const BTN_CANCEL: React.CSSProperties = {
+  borderRadius: 6, fontWeight: 700, cursor: "pointer",
+  border: "1.5px solid var(--surface2)", background: "var(--surface)",
+  color: "var(--text-dim)", padding: "6px 14px", fontSize: "0.85rem",
+};
+function btnConfirm(enabled: boolean): React.CSSProperties {
+  return {
+    borderRadius: 6, fontWeight: 700, padding: "6px 14px", fontSize: "0.85rem",
+    background: enabled ? "var(--accent)" : "var(--surface2)",
+    color: enabled ? "#fff" : "var(--text-dim)",
+    border: "none", cursor: enabled ? "pointer" : "not-allowed", opacity: enabled ? 1 : 0.6,
+  };
+}
+
+// ── Phase 1: choose split ────────────────────────────────────────────────────
 
 interface SplitProps {
   troopDeckSize:   number;
@@ -12,86 +63,57 @@ interface SplitProps {
 }
 
 export function ScoutSplitModal({ troopDeckSize, tacticsDeckSize, onConfirm, onCancel }: SplitProps) {
-  const maxTroop   = Math.min(3, troopDeckSize);
-  const [troop, setTroop] = useState(Math.min(3, troopDeckSize));
-  const tactics = 3 - troop;
-  const valid = troop + tactics === 3 && troop <= troopDeckSize && tactics <= tacticsDeckSize;
+  const [selected, setSelected] = useState<[number, number] | null>(null);
 
-  const btn: React.CSSProperties = {
-    borderRadius: 6, fontWeight: 700, cursor: "pointer",
-    border: "1.5px solid var(--surface2)", background: "var(--surface)",
-    color: "var(--text)", width: 36, height: 36, padding: 0, fontSize: "0.9rem",
-    transition: "border 0.1s, background 0.1s",
-  };
+  const options: [number, number][] = [
+    [3, 0], [2, 1], [1, 2], [0, 3],
+  ].filter(([t, k]) => t <= troopDeckSize && k <= tacticsDeckSize) as [number, number][];
 
   return (
-    <div style={{
-      position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 100,
-      display: "flex", alignItems: "center", justifyContent: "center",
-    }}>
-      <div style={{
-        background: "var(--surface)", borderRadius: 12, padding: "22px 28px",
-        border: "1.5px solid var(--surface2)", boxShadow: "0 8px 32px rgba(0,0,0,0.25)",
-        minWidth: 260,
-      }}>
-        <div style={{ fontWeight: 800, fontSize: "1rem", marginBottom: 16, color: "var(--accent)" }}>
+    <div style={MODAL}>
+      <div style={{ ...PANEL, minWidth: 280 }}>
+        <div style={{ fontWeight: 800, fontSize: "1rem", marginBottom: 6, color: "var(--accent)" }}>
           SCOUT — Draw 3 Cards
         </div>
-
-        <div style={{ fontSize: "0.8rem", color: "var(--text-dim)", marginBottom: 12 }}>
+        <div style={{ fontSize: "0.8rem", color: "var(--text-dim)", marginBottom: 16 }}>
           Troop deck: {troopDeckSize} · Tactics deck: {tacticsDeckSize}
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
-          <span style={{ width: 80, fontSize: "0.85rem" }}>From Troops</span>
-          <div style={{ display: "flex", gap: 6 }}>
-            {Array.from({ length: 4 }, (_, i) => (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
+          {options.map(([t, k]) => {
+            const active = selected?.[0] === t && selected?.[1] === k;
+            return (
               <button
-                key={i}
-                onClick={() => setTroop(i)}
-                disabled={i > maxTroop || (3 - i) > tacticsDeckSize}
+                key={`${t}-${k}`}
+                onClick={() => setSelected([t, k])}
                 style={{
-                  ...btn,
-                  border: troop === i ? "2px solid var(--accent)" : btn.border,
-                  background: troop === i ? "rgba(201,106,42,0.15)" : btn.background,
-                  opacity: (i > maxTroop || (3 - i) > tacticsDeckSize) ? 0.35 : 1,
-                  cursor: (i > maxTroop || (3 - i) > tacticsDeckSize) ? "not-allowed" : "pointer",
+                  borderRadius: 8, padding: "10px 14px", fontWeight: 600, fontSize: "0.88rem",
+                  textAlign: "left", cursor: "pointer",
+                  border: active ? "2px solid var(--accent)" : "1.5px solid var(--surface2)",
+                  background: active ? "rgba(201,106,42,0.12)" : "var(--bg)",
+                  color: "var(--text)",
                 }}
               >
-                {i}
+                <span style={{ fontWeight: 800 }}>{t}</span>
+                <span style={{ color: "var(--text-dim)" }}> from troops · </span>
+                <span style={{ fontWeight: 800 }}>{k}</span>
+                <span style={{ color: "var(--text-dim)" }}> from tactics</span>
               </button>
-            ))}
-          </div>
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
-          <span style={{ width: 80, fontSize: "0.85rem" }}>From Tactics</span>
-          <span style={{
-            width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center",
-            borderRadius: 6, background: "var(--bg)", border: "1.5px solid var(--surface2)",
-            fontWeight: 700, fontSize: "0.9rem", color: tactics < 0 ? "var(--claimed-opp)" : "var(--text)",
-          }}>
-            {tactics < 0 ? "!" : tactics}
-          </span>
+            );
+          })}
+          {options.length === 0 && (
+            <div style={{ color: "var(--claimed-opp)", fontSize: "0.85rem" }}>
+              Not enough cards in either deck to scout.
+            </div>
+          )}
         </div>
 
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-          <button onClick={onCancel} style={{
-            borderRadius: 6, fontWeight: 700, cursor: "pointer",
-            border: "1.5px solid var(--surface2)", background: "var(--surface)",
-            color: "var(--text-dim)", padding: "6px 14px", fontSize: "0.85rem",
-          }}>
-            Cancel
-          </button>
+          <button onClick={onCancel} style={BTN_CANCEL}>Cancel</button>
           <button
-            disabled={!valid}
-            onClick={() => valid && onConfirm(troop, tactics)}
-            style={{
-              borderRadius: 6, fontWeight: 700, padding: "6px 14px", fontSize: "0.85rem",
-              background: valid ? "var(--accent)" : "var(--surface2)",
-              color: valid ? "#fff" : "var(--text-dim)",
-              border: "none", cursor: valid ? "pointer" : "not-allowed", opacity: valid ? 1 : 0.6,
-            }}
+            disabled={!selected}
+            onClick={() => selected && onConfirm(selected[0], selected[1])}
+            style={btnConfirm(!!selected)}
           >
             Draw
           </button>
@@ -101,107 +123,121 @@ export function ScoutSplitModal({ troopDeckSize, tacticsDeckSize, onConfirm, onC
   );
 }
 
-// ── Phase 2: return 2 cards to decks ──────────────────────────────────────────
-
-interface ReturnEntry { card: CardData; dest: "troop" | "tactics" }
+// ── Phase 2: return 2 cards ──────────────────────────────────────────────────
 
 interface ReturnProps {
   hand:      CardData[];
-  onConfirm: (returns: ReturnEntry[]) => void;
+  preHand:   CardData[];   // hand snapshot before scout_reveal was sent
+  onConfirm: (cards: CardData[]) => void;
   onCancel:  () => void;
 }
 
-export function ScoutReturnModal({ hand, onConfirm, onCancel }: ReturnProps) {
-  const [selections, setSelections] = useState<ReturnEntry[]>([]);
+export function ScoutReturnModal({ hand, preHand, onConfirm, onCancel }: ReturnProps) {
+  const [selected, setSelected] = useState<CardData[]>([]);
 
-  function toggleCard(card: CardData, dest: "troop" | "tactics") {
-    const idx = selections.findIndex(s => s.card === card && s.dest === dest);
-    if (idx >= 0) {
-      setSelections(prev => prev.filter((_, i) => i !== idx));
-    } else if (selections.length < 2) {
-      setSelections(prev => [...prev, { card, dest }]);
-    }
+  const newCards = preHand.length > 0 ? diffHands(preHand, hand) : [];
+  const waiting  = preHand.length > 0 && newCards.length === 0;
+
+  function toggle(card: CardData) {
+    setSelected(prev => {
+      const already = prev.includes(card);
+      if (already) return prev.filter(c => c !== card);
+      if (prev.length >= 2) return prev;
+      return [...prev, card];
+    });
   }
 
-  function isSelected(card: CardData, dest: "troop" | "tactics") {
-    return selections.some(s => s.card === card && s.dest === dest);
-  }
+  const ready = selected.length === 2;
 
-  const ready = selections.length === 2;
+  if (waiting) {
+    return (
+      <div style={MODAL}>
+        <div style={{ ...PANEL, color: "var(--text-dim)", fontSize: "0.9rem" }}>
+          Drawing cards…
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div style={{
-      position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 100,
-      display: "flex", alignItems: "center", justifyContent: "center",
-    }}>
-      <div style={{
-        background: "var(--surface)", borderRadius: 12, padding: "22px 28px",
-        border: "1.5px solid var(--surface2)", boxShadow: "0 8px 32px rgba(0,0,0,0.25)",
-        maxWidth: 480,
-      }}>
-        <div style={{ fontWeight: 800, fontSize: "1rem", marginBottom: 6, color: "var(--accent)" }}>
-          SCOUT — Return 2 Cards
-        </div>
-        <div style={{ fontSize: "0.78rem", color: "var(--text-dim)", marginBottom: 16 }}>
-          Click a card then choose where to return it. Select {2 - selections.length} more.
+    <div style={MODAL}>
+      <div style={{ ...PANEL, maxWidth: 520 }}>
+        <div style={{ fontWeight: 800, fontSize: "1rem", marginBottom: 14, color: "var(--accent)" }}>
+          SCOUT
         </div>
 
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 16 }}>
+        {/* Newly drawn cards */}
+        {newCards.length > 0 && (
+          <div style={{
+            background: "rgba(74,140,64,0.08)", border: "1.5px solid rgba(74,140,64,0.3)",
+            borderRadius: 8, padding: "10px 14px", marginBottom: 18,
+          }}>
+            <div style={{ fontSize: "0.75rem", fontWeight: 700, color: "var(--claimed-me)", marginBottom: 8 }}>
+              You drew {newCards.length} card{newCards.length !== 1 ? "s" : ""}:
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {newCards.map((card, i) => <CardTile key={i} card={card} />)}
+            </div>
+          </div>
+        )}
+
+        {/* Return picker */}
+        <div style={{ fontSize: "0.8rem", color: "var(--text-dim)", marginBottom: 12 }}>
+          Select 2 cards to return. Each goes back to its natural deck automatically.
+          {selected.length > 0 && (
+            <span style={{ color: "var(--text)", fontWeight: 700 }}>
+              {" "}({2 - selected.length} more)
+            </span>
+          )}
+        </div>
+
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 18 }}>
           {hand.map((card, i) => {
-            const troopSel    = isSelected(card, "troop");
-            const tacticsSel  = isSelected(card, "tactics");
-            const anySel      = troopSel || tacticsSel;
+            const isSel  = selected.includes(card);
+            const isNew  = newCards.includes(card);
+            const dest   = autoDest(card);
             return (
               <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-                <CardTile card={card} selected={anySel} />
-                <div style={{ display: "flex", gap: 4 }}>
-                  <button
-                    onClick={() => toggleCard(card, "troop")}
-                    style={{
-                      fontSize: "0.6rem", fontWeight: 700, padding: "2px 5px", borderRadius: 4,
-                      border: troopSel ? "2px solid var(--accent)" : "1.5px solid var(--surface2)",
-                      background: troopSel ? "rgba(201,106,42,0.15)" : "var(--bg)",
-                      cursor: "pointer", color: "var(--text)",
-                    }}
-                  >
-                    Troop
-                  </button>
-                  <button
-                    onClick={() => toggleCard(card, "tactics")}
-                    style={{
-                      fontSize: "0.6rem", fontWeight: 700, padding: "2px 5px", borderRadius: 4,
-                      border: tacticsSel ? "2px solid var(--accent)" : "1.5px solid var(--surface2)",
-                      background: tacticsSel ? "rgba(201,106,42,0.15)" : "var(--bg)",
-                      cursor: "pointer", color: "var(--text)",
-                    }}
-                  >
-                    Tactics
-                  </button>
+                <div style={{ position: "relative" }}>
+                  <CardTile
+                    card={card}
+                    selected={isSel}
+                    highlighted={isNew && !isSel}
+                    onClick={() => toggle(card)}
+                  />
+                  {isNew && !isSel && (
+                    <div style={{
+                      position: "absolute", top: -6, right: -6,
+                      background: "var(--claimed-me)", color: "#fff",
+                      fontSize: "0.5rem", fontWeight: 800, padding: "1px 4px", borderRadius: 3,
+                    }}>
+                      NEW
+                    </div>
+                  )}
                 </div>
+                {isSel && (
+                  <div style={{
+                    fontSize: "0.6rem", fontWeight: 700,
+                    color: dest === "troop" ? "var(--suit-blue)" : "var(--accent)",
+                    background: dest === "troop" ? "rgba(30,95,160,0.1)" : "rgba(201,106,42,0.1)",
+                    padding: "2px 6px", borderRadius: 4, whiteSpace: "nowrap",
+                  }}>
+                    → {dest === "troop" ? "Troop" : "Tactics"}
+                  </div>
+                )}
               </div>
             );
           })}
         </div>
 
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-          <button onClick={onCancel} style={{
-            borderRadius: 6, fontWeight: 700, cursor: "pointer",
-            border: "1.5px solid var(--surface2)", background: "var(--surface)",
-            color: "var(--text-dim)", padding: "6px 14px", fontSize: "0.85rem",
-          }}>
-            Cancel
-          </button>
+          <button onClick={onCancel} style={BTN_CANCEL}>Cancel</button>
           <button
             disabled={!ready}
-            onClick={() => ready && onConfirm(selections)}
-            style={{
-              borderRadius: 6, fontWeight: 700, padding: "6px 14px", fontSize: "0.85rem",
-              background: ready ? "var(--accent)" : "var(--surface2)",
-              color: ready ? "#fff" : "var(--text-dim)",
-              border: "none", cursor: ready ? "pointer" : "not-allowed", opacity: ready ? 1 : 0.6,
-            }}
+            onClick={() => ready && onConfirm(selected)}
+            style={btnConfirm(ready)}
           >
-            Confirm
+            Return
           </button>
         </div>
       </div>

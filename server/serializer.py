@@ -1,9 +1,11 @@
 """Convert BattleLineGame objects to player-POV JSON dicts for WebSocket transport."""
 
-from battleline import BattleLineGame, Card, WildCard, TacticsCard
+from battleline import BattleLineGame, Card, WildCard, UnassignedWild, TacticsCard
 
 
 def serialize_card(card) -> dict:
+    if isinstance(card, UnassignedWild):
+        return {"type": "wild", "tactic_name": card.tactic_name, "suit": None, "value": None}
     if isinstance(card, WildCard):
         return {"type": "wild", "tactic_name": card.tactic_name, "suit": card.suit, "value": card.value}
     if isinstance(card, TacticsCard):

@@ -3,7 +3,7 @@
 import time
 import uuid
 from battleline import (
-    BattleLineGame, Card, WildCard, TacticsCard, SUITS,
+    BattleLineGame, Card, WildCard, UnassignedWild, TacticsCard, SUITS,
 )
 
 
@@ -141,7 +141,7 @@ class GameManager:
 
         if action == "play_wild":
             tactic = self._tactic_from_hand(move["tactic"], game, player)
-            msg = game.play_wild(player, tactic, move["totem"], move["suit"], move["value"])
+            msg = game.play_unassigned_wild(player, tactic, move["totem"])
             return msg, True
 
         if action == "play_environment":
@@ -211,6 +211,13 @@ class GameManager:
 
     @staticmethod
     def _matches(card, data: dict) -> bool:
+        if isinstance(card, UnassignedWild):
+            return (
+                data.get("type") == "wild"
+                and card.tactic_name == data.get("tactic_name")
+                and data.get("suit") is None
+                and data.get("value") is None
+            )
         if isinstance(card, WildCard):
             return (
                 data.get("type") == "wild"
