@@ -11,9 +11,8 @@ export interface Profile {
 }
 
 // Fetches the profile, creating it from OAuth metadata if it doesn't exist yet.
-// Handles the case where the DB trigger hasn't been set up.
 export async function getOrCreateProfile(session: Session): Promise<Profile | null> {
-  const { data: existing } = await supabase
+  const { data: existing, error: fetchErr } = await supabase
     .from("profiles")
     .select("id, display_name")
     .eq("id", session.user.id)
@@ -21,17 +20,34 @@ export async function getOrCreateProfile(session: Session): Promise<Profile | nu
 
   if (existing) return existing;
 
+  // PGRST116 = "0 rows" — expected on first login, not a real error
+  if (fetchErr && fetchErr.code !== "PGRST116") {
+    console.error("[profile] fetch error:", fetchErr);
+    return null;
+  }
+
   const displayName =
     (session.user.user_metadata?.full_name as string | undefined) ??
     (session.user.user_metadata?.name    as string | undefined) ??
     session.user.email?.split("@")[0] ??
     "Player";
 
-  const { data: created } = await supabase
+  const { data: created, error: insertErr } = await supabase
     .from("profiles")
     .insert({ id: session.user.id, display_name: displayName })
     .select("id, display_name")
     .single();
 
-  return created ?? null;
+  if (insertErr) {
+    console.error("[profile] insert error:", insertErr);
+    // Row may have been created by a DB trigger between our fetch and insert — retry
+    const { data: retry } = await supabase
+      .from("profiles")
+      .select("id, display_name")
+      .eq("id", session.user.id)
+      .single();
+    return retry ?? null;
+  }
+
+  return created;
 }

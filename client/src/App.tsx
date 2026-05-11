@@ -21,25 +21,28 @@ export default function App() {
 
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
+      (event, session) => {
         if (event === "SIGNED_OUT" || !session) {
           setPhase({ screen: "landing" });
           return;
         }
 
-        // INITIAL_SESSION = page load with existing session
-        // SIGNED_IN       = returning from Google OAuth redirect
-        if (event === "INITIAL_SESSION" || event === "SIGNED_IN") {
-          const profile = await getOrCreateProfile(session);
-          if (profile) {
-            setPhase(prev =>
-              prev.screen === "loading" || prev.screen === "landing"
-                ? { screen: "lobby", user: { displayName: profile.display_name, token: session.user.id } }
-                : prev   // don't interrupt an active game
-            );
-          } else {
-            setPhase({ screen: "landing" });
-          }
+        if (event === "SIGNED_IN" || event === "INITIAL_SESSION" || event === "TOKEN_REFRESHED") {
+          // Use Google metadata directly — no DB query blocking the UI
+          const displayName =
+            (session.user.user_metadata?.full_name as string | undefined) ??
+            (session.user.user_metadata?.name    as string | undefined) ??
+            session.user.email?.split("@")[0] ??
+            "Player";
+
+          setPhase(prev =>
+            prev.screen === "loading" || prev.screen === "landing"
+              ? { screen: "lobby", user: { displayName, token: session.user.id } }
+              : prev
+          );
+
+          // Sync the profiles table in the background — never blocks the UI
+          getOrCreateProfile(session).catch(console.error);
         }
       }
     );
