@@ -1,4 +1,4 @@
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type Session } from "@supabase/supabase-js";
 
 const url = import.meta.env.VITE_SUPABASE_URL as string;
 const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
@@ -10,17 +10,28 @@ export interface Profile {
   display_name: string;
 }
 
-export async function fetchProfile(userId: string): Promise<Profile | null> {
-  const { data } = await supabase
+// Fetches the profile, creating it from OAuth metadata if it doesn't exist yet.
+// Handles the case where the DB trigger hasn't been set up.
+export async function getOrCreateProfile(session: Session): Promise<Profile | null> {
+  const { data: existing } = await supabase
     .from("profiles")
     .select("id, display_name")
-    .eq("id", userId)
+    .eq("id", session.user.id)
     .single();
-  return data ?? null;
-}
 
-export async function createProfile(userId: string, displayName: string): Promise<void> {
-  await supabase
+  if (existing) return existing;
+
+  const displayName =
+    (session.user.user_metadata?.full_name as string | undefined) ??
+    (session.user.user_metadata?.name    as string | undefined) ??
+    session.user.email?.split("@")[0] ??
+    "Player";
+
+  const { data: created } = await supabase
     .from("profiles")
-    .insert({ id: userId, display_name: displayName });
+    .insert({ id: session.user.id, display_name: displayName })
+    .select("id, display_name")
+    .single();
+
+  return created ?? null;
 }

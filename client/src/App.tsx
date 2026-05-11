@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import type { User } from "./types";
-import { supabase, fetchProfile } from "./lib/supabase";
+import { supabase, getOrCreateProfile } from "./lib/supabase";
 import { useGameSocket } from "./hooks/useGameSocket";
 import LandingPage from "./components/LandingPage";
 import LobbyPage from "./components/LobbyPage";
@@ -19,27 +19,35 @@ type Phase =
 export default function App() {
   const [phase, setPhase] = useState<Phase>({ screen: "loading" });
 
-  // Bootstrap from existing Supabase session on mount
   useEffect(() => {
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      if (!session) { setPhase({ screen: "landing" }); return; }
-      const profile = await fetchProfile(session.user.id);
-      if (profile) {
-        setPhase({ screen: "lobby", user: { displayName: profile.display_name, token: session.user.id } });
-      } else {
-        setPhase({ screen: "landing" });
-      }
-    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        if (event === "SIGNED_OUT" || !session) {
+          setPhase({ screen: "landing" });
+          return;
+        }
 
-    // Handle sign-out from anywhere (other tab, session expiry, etc.)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
-      if (event === "SIGNED_OUT") setPhase({ screen: "landing" });
-    });
+        // INITIAL_SESSION = page load with existing session
+        // SIGNED_IN       = returning from Google OAuth redirect
+        if (event === "INITIAL_SESSION" || event === "SIGNED_IN") {
+          const profile = await getOrCreateProfile(session);
+          if (profile) {
+            setPhase(prev =>
+              prev.screen === "loading" || prev.screen === "landing"
+                ? { screen: "lobby", user: { displayName: profile.display_name, token: session.user.id } }
+                : prev   // don't interrupt an active game
+            );
+          } else {
+            setPhase({ screen: "landing" });
+          }
+        }
+      }
+    );
 
     return () => subscription.unsubscribe();
   }, []);
 
-  // WebSocket is only active once the player has entered a game
+  // WebSocket is only active once the player is in a game
   const wsToken =
     phase.screen === "waiting" || phase.screen === "game"
       ? phase.user.token
@@ -47,7 +55,7 @@ export default function App() {
 
   const { status, gameState, lastError, sendMove } = useGameSocket(wsToken);
 
-  // When creator's WS fires game_start/state, advance from waiting → game
+  // Advance creator from waiting → game once opponent joins
   useEffect(() => {
     if (phase.screen === "waiting" && status === "playing") {
       setPhase(p =>
@@ -57,10 +65,6 @@ export default function App() {
   }, [status, phase.screen]);
 
   // ── Handlers ────────────────────────────────────────────────────────────────
-
-  function handleAuth(user: User) {
-    setPhase({ screen: "lobby", user });
-  }
 
   async function handleSignOut() {
     await supabase.auth.signOut();
@@ -96,7 +100,7 @@ export default function App() {
       );
 
     case "landing":
-      return <LandingPage onAuth={handleAuth} />;
+      return <LandingPage />;
 
     case "lobby":
       return (

@@ -1,80 +1,20 @@
 import { useState } from "react";
-import type { User } from "../types";
-import { supabase, fetchProfile, createProfile } from "../lib/supabase";
+import { supabase } from "../lib/supabase";
 
-interface Props {
-  onAuth: (user: User) => void;
-}
+export default function LandingPage() {
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState("");
 
-type ModalMode = "signin" | "signup" | null;
-
-const inputStyle: React.CSSProperties = {
-  width: "100%", padding: "10px 14px", borderRadius: 6,
-  background: "var(--bg)", color: "var(--text)", fontSize: "1rem",
-  boxSizing: "border-box",
-};
-
-const btnPrimary: React.CSSProperties = {
-  width: "100%", marginTop: 20, padding: "11px",
-  background: "var(--accent)", color: "#fff",
-  fontWeight: 700, fontSize: "1rem", borderRadius: 6, border: "none",
-  cursor: "pointer",
-};
-
-const btnGhost: React.CSSProperties = {
-  width: "100%", marginTop: 10, padding: "8px",
-  background: "transparent", color: "var(--text-dim)",
-  fontSize: "0.85rem", border: "none", cursor: "pointer",
-};
-
-export default function LandingPage({ onAuth }: Props) {
-  const [modal, setModal]       = useState<ModalMode>(null);
-  const [email, setEmail]       = useState("");
-  const [password, setPassword] = useState("");
-  const [name, setName]         = useState("");
-  const [error, setError]       = useState("");
-  const [loading, setLoading]   = useState(false);
-
-  function openModal(mode: ModalMode) {
-    setModal(mode);
-    setEmail(""); setPassword(""); setName(""); setError("");
+  async function signInWithGoogle() {
+    setLoading(true);
+    setError("");
+    const { error: err } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options:  { redirectTo: window.location.origin },
+    });
+    if (err) { setError(err.message); setLoading(false); }
+    // On success the browser redirects — no further action needed
   }
-
-  async function handleSignUp() {
-    const trimName = name.trim();
-    if (!trimName) { setError("Display name is required."); return; }
-    if (trimName.length < 2) { setError("Name must be at least 2 characters."); return; }
-    if (!email.includes("@")) { setError("Enter a valid email."); return; }
-    if (password.length < 6) { setError("Password must be at least 6 characters."); return; }
-
-    setLoading(true); setError("");
-    const { data, error: signUpErr } = await supabase.auth.signUp({ email, password });
-    if (signUpErr || !data.user) {
-      setError(signUpErr?.message ?? "Sign-up failed."); setLoading(false); return;
-    }
-    await createProfile(data.user.id, trimName);
-    onAuth({ displayName: trimName, token: data.user.id });
-    setLoading(false);
-  }
-
-  async function handleSignIn() {
-    if (!email) { setError("Enter your email."); return; }
-    if (!password) { setError("Enter your password."); return; }
-
-    setLoading(true); setError("");
-    const { data, error: signInErr } = await supabase.auth.signInWithPassword({ email, password });
-    if (signInErr || !data.user) {
-      setError(signInErr?.message ?? "Sign-in failed."); setLoading(false); return;
-    }
-    const profile = await fetchProfile(data.user.id);
-    if (!profile) {
-      setError("Account found but no profile — contact support."); setLoading(false); return;
-    }
-    onAuth({ displayName: profile.display_name, token: data.user.id });
-    setLoading(false);
-  }
-
-  const handleSubmit = modal === "signup" ? handleSignUp : handleSignIn;
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
@@ -87,16 +27,17 @@ export default function LandingPage({ onAuth }: Props) {
         <span style={{ fontWeight: 800, fontSize: "1.1rem", color: "var(--accent)" }}>
           ⚔️ Battle Line
         </span>
-        <div style={{ display: "flex", gap: 12 }}>
-          <button onClick={() => openModal("signin")}
-            style={{ background: "transparent", border: "1px solid var(--surface2)", color: "var(--text)", padding: "6px 18px", borderRadius: 6, cursor: "pointer" }}>
-            Sign In
-          </button>
-          <button onClick={() => openModal("signup")}
-            style={{ background: "var(--accent)", color: "#fff", padding: "6px 18px", borderRadius: 6, border: "none", cursor: "pointer" }}>
-            Create Account
-          </button>
-        </div>
+        <button
+          onClick={signInWithGoogle}
+          disabled={loading}
+          style={{
+            background: "var(--accent)", color: "#fff", padding: "6px 18px",
+            borderRadius: 6, border: "none", cursor: loading ? "not-allowed" : "pointer",
+            fontWeight: 700, opacity: loading ? 0.7 : 1,
+          }}
+        >
+          {loading ? "Redirecting…" : "Sign In"}
+        </button>
       </nav>
 
       {/* Hero */}
@@ -116,18 +57,30 @@ export default function LandingPage({ onAuth }: Props) {
           </p>
         </div>
 
-        <div style={{ display: "flex", gap: 14 }}>
-          <button onClick={() => openModal("signup")}
-            style={{ background: "var(--accent)", color: "#fff", fontWeight: 700, fontSize: "1rem", padding: "12px 32px", borderRadius: 6, border: "none", cursor: "pointer" }}>
-            Play Now →
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
+          <button
+            onClick={signInWithGoogle}
+            disabled={loading}
+            style={{
+              display: "flex", alignItems: "center", gap: 12,
+              background: "#fff", color: "#3c4043",
+              padding: "12px 28px", borderRadius: 8,
+              border: "1.5px solid #dadce0",
+              fontWeight: 600, fontSize: "1rem",
+              cursor: loading ? "not-allowed" : "pointer",
+              boxShadow: "0 1px 3px rgba(0,0,0,0.12)",
+              opacity: loading ? 0.7 : 1,
+            }}
+          >
+            <GoogleIcon />
+            {loading ? "Redirecting…" : "Continue with Google"}
           </button>
-          <button onClick={() => openModal("signin")}
-            style={{ background: "transparent", border: "1px solid var(--surface2)", color: "var(--text)", fontSize: "1rem", padding: "12px 32px", borderRadius: 6, cursor: "pointer" }}>
-            Sign In
-          </button>
+          {error && (
+            <p style={{ color: "var(--claimed-opp)", fontSize: "0.85rem", margin: 0 }}>{error}</p>
+          )}
         </div>
 
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", justifyContent: "center", marginTop: 8 }}>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", justifyContent: "center" }}>
           {["9 totems", "60-card troop deck", "10 tactics cards", "Real-time multiplayer"].map(f => (
             <span key={f} style={{
               padding: "6px 14px", borderRadius: 20,
@@ -139,104 +92,17 @@ export default function LandingPage({ onAuth }: Props) {
           ))}
         </div>
       </main>
-
-      {/* Auth modal */}
-      {modal && (
-        <div
-          style={{
-            position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)",
-            display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100,
-          }}
-          onClick={() => !loading && openModal(null)}
-        >
-          <div
-            style={{
-              background: "var(--surface)", borderRadius: 12, padding: "36px 40px",
-              width: 380, boxShadow: "0 20px 60px rgba(0,0,0,0.5)",
-              border: "1px solid var(--surface2)",
-            }}
-            onClick={e => e.stopPropagation()}
-          >
-            <h2 style={{ marginBottom: 24, fontSize: "1.4rem" }}>
-              {modal === "signup" ? "Create Account" : "Welcome Back"}
-            </h2>
-
-            {/* Display name — signup only */}
-            {modal === "signup" && (
-              <div style={{ marginBottom: 14 }}>
-                <label style={{ display: "block", marginBottom: 6, fontSize: "0.85rem", color: "var(--text-dim)" }}>
-                  Display name
-                </label>
-                <input
-                  autoFocus
-                  value={name}
-                  onChange={e => { setName(e.target.value); setError(""); }}
-                  onKeyDown={e => e.key === "Enter" && handleSubmit()}
-                  placeholder="e.g. Alexander"
-                  style={{ ...inputStyle, border: "1px solid var(--surface2)" }}
-                />
-              </div>
-            )}
-
-            {/* Email */}
-            <div style={{ marginBottom: 14 }}>
-              <label style={{ display: "block", marginBottom: 6, fontSize: "0.85rem", color: "var(--text-dim)" }}>
-                Email
-              </label>
-              <input
-                autoFocus={modal === "signin"}
-                type="email"
-                value={email}
-                onChange={e => { setEmail(e.target.value); setError(""); }}
-                onKeyDown={e => e.key === "Enter" && handleSubmit()}
-                placeholder="you@example.com"
-                style={{ ...inputStyle, border: "1px solid var(--surface2)" }}
-              />
-            </div>
-
-            {/* Password */}
-            <div style={{ marginBottom: 4 }}>
-              <label style={{ display: "block", marginBottom: 6, fontSize: "0.85rem", color: "var(--text-dim)" }}>
-                Password
-              </label>
-              <input
-                type="password"
-                value={password}
-                onChange={e => { setPassword(e.target.value); setError(""); }}
-                onKeyDown={e => e.key === "Enter" && handleSubmit()}
-                placeholder="••••••••"
-                style={{ ...inputStyle, border: "1px solid var(--surface2)" }}
-              />
-            </div>
-
-            {error && (
-              <p style={{ color: "var(--claimed-opp)", fontSize: "0.8rem", marginTop: 8 }}>{error}</p>
-            )}
-
-            <button
-              onClick={handleSubmit}
-              disabled={loading}
-              style={{ ...btnPrimary, opacity: loading ? 0.7 : 1, cursor: loading ? "not-allowed" : "pointer" }}
-            >
-              {loading ? "…" : modal === "signup" ? "Create Account" : "Sign In"}
-            </button>
-
-            <div style={{ marginTop: 16, textAlign: "center", fontSize: "0.82rem", color: "var(--text-dim)" }}>
-              {modal === "signup" ? "Already have an account? " : "No account? "}
-              <button
-                onClick={() => openModal(modal === "signup" ? "signin" : "signup")}
-                style={{ background: "none", border: "none", color: "var(--accent)", cursor: "pointer", fontWeight: 700, fontSize: "0.82rem" }}
-              >
-                {modal === "signup" ? "Sign in" : "Create one"}
-              </button>
-            </div>
-
-            <button onClick={() => !loading && openModal(null)} style={btnGhost}>
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
     </div>
+  );
+}
+
+function GoogleIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18">
+      <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.875 2.684-6.615z"/>
+      <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/>
+      <path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/>
+      <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z"/>
+    </svg>
   );
 }
