@@ -141,6 +141,7 @@ export default function App() {
           gameId={phase.gameId}
           onMove={sendMove}
           error={lastError}
+          onLeave={() => setPhase({ screen: "lobby", user: phase.user })}
         />
       );
   }

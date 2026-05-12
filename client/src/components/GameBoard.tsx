@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { GameState, CardData, TacticsCard } from "../types";
 import Board from "./Board";
 import Hand from "./Hand";
-import { ScoutSplitModal, ScoutReturnModal } from "./ScoutModal";
+import { ScoutSplitModal, ScoutReturnPanel } from "./ScoutModal";
 
 // ── Phase machine ─────────────────────────────────────────────────────────────
 
@@ -25,13 +25,14 @@ const ENV_TACTICS  = new Set(["fog", "mud"]);
 // ── Component ─────────────────────────────────────────────────────────────────
 
 interface Props {
-  state:  GameState;
-  gameId: string;
-  onMove: (move: object) => void;
-  error:  string | null;
+  state:    GameState;
+  gameId:   string;
+  onMove:   (move: object) => void;
+  error:    string | null;
+  onLeave:  () => void;
 }
 
-export default function GameBoard({ state, onMove, error }: Props) {
+export default function GameBoard({ state, onMove, error, onLeave }: Props) {
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
   const [draggedCard, setDraggedCard] = useState<CardData | null>(null);
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
@@ -316,7 +317,20 @@ export default function GameBoard({ state, onMove, error }: Props) {
           </span>
         </div>
 
-        <span style={{ fontWeight: 700, color: turnColor }}>{turnLabel}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ fontWeight: 700, color: turnColor }}>{turnLabel}</span>
+          {winner !== null && (
+            <button
+              onClick={onLeave}
+              style={{
+                borderRadius: 6, fontWeight: 700, padding: "5px 14px", fontSize: "0.8rem",
+                background: "var(--accent)", color: "#fff", border: "none", cursor: "pointer",
+              }}
+            >
+              Back to Lobby
+            </button>
+          )}
+        </div>
 
         <div style={{ fontSize: "0.8rem", color: "var(--text-dim)", textAlign: "right" }}>
           Tactics: me {my_tactics_played} / opp {opp_tactics_played}
@@ -396,43 +410,59 @@ export default function GameBoard({ state, onMove, error }: Props) {
         </div>
       )}
 
-      {/* Hand */}
+      {/* Hand / Scout return panel */}
       <div style={{
-        padding: "8px 16px 20px",
         background: "var(--surface)",
         borderTop: "1.5px solid var(--surface2)",
         flexShrink: 0,
       }}>
-        <div style={{
-          color: phase.kind === "draw" ? "var(--accent)" : "var(--text-dim)",
-          fontSize: "0.75rem", marginBottom: 8, paddingLeft: 2,
-          fontWeight: phase.kind === "draw" ? 700 : 400,
-        }}>
-          {buildHint()}
-          {phase.kind === "idle" && tacticsBlocked && selectedCard?.type === "tactics" && (
-            <span style={{ color: "var(--claimed-opp)", marginLeft: 8 }}>
-              (opponent must play a tactic first)
-            </span>
-          )}
-          {phase.kind === "idle" && selectedCard?.type === "tactics" &&
-           isLeaderBlocked(selectedCard.name) && (
-            <span style={{ color: "var(--claimed-opp)", marginLeft: 8 }}>
-              (can't play both Alexander and Darius)
-            </span>
-          )}
-        </div>
-        <Hand
-          cards={state.my_hand}
-          selectedIdx={selectedIdx}
-          myTurn={my_turn && winner === null && phase.kind !== "draw" && phase.kind !== "scout_return"}
-          onSelect={handleCardSelect}
-          onCardDragStart={(card) => {
-            if (phase.kind !== "idle") return;
-            setDraggedCard(card);
-            setSelectedIdx(null);
-          }}
-          onDragEnd={() => setDraggedCard(null)}
-        />
+        {phase.kind === "scout_return" ? (
+          <ScoutReturnPanel
+            hand={state.my_hand}
+            preHand={preScoutHand.current}
+            onConfirm={(cards: import("../types").CardData[]) => {
+              const returns = cards.map((card: import("../types").CardData) => ({
+                card,
+                dest: card.type === "troop" ? "troop" : "tactics",
+              }));
+              onMove({ action: "scout_return", returns });
+              resetSelection();
+            }}
+          />
+        ) : (
+          <div style={{ padding: "8px 16px 20px" }}>
+            <div style={{
+              color: phase.kind === "draw" ? "var(--accent)" : "var(--text-dim)",
+              fontSize: "0.75rem", marginBottom: 8, paddingLeft: 2,
+              fontWeight: phase.kind === "draw" ? 700 : 400,
+            }}>
+              {buildHint()}
+              {phase.kind === "idle" && tacticsBlocked && selectedCard?.type === "tactics" && (
+                <span style={{ color: "var(--claimed-opp)", marginLeft: 8 }}>
+                  (opponent must play a tactic first)
+                </span>
+              )}
+              {phase.kind === "idle" && selectedCard?.type === "tactics" &&
+               isLeaderBlocked(selectedCard.name) && (
+                <span style={{ color: "var(--claimed-opp)", marginLeft: 8 }}>
+                  (can't play both Alexander and Darius)
+                </span>
+              )}
+            </div>
+            <Hand
+              cards={state.my_hand}
+              selectedIdx={selectedIdx}
+              myTurn={my_turn && winner === null && phase.kind !== "draw"}
+              onSelect={handleCardSelect}
+              onCardDragStart={(card) => {
+                if (phase.kind !== "idle") return;
+                setDraggedCard(card);
+                setSelectedIdx(null);
+              }}
+              onDragEnd={() => setDraggedCard(null)}
+            />
+          </div>
+        )}
       </div>
 
       {/* Scout split modal */}
@@ -450,23 +480,6 @@ export default function GameBoard({ state, onMove, error }: Props) {
             });
             setPhase({ kind: "scout_return" });
             setSelectedIdx(null);
-          }}
-          onCancel={resetSelection}
-        />
-      )}
-
-      {/* Scout return modal */}
-      {phase.kind === "scout_return" && (
-        <ScoutReturnModal
-          hand={state.my_hand}
-          preHand={preScoutHand.current}
-          onConfirm={(cards) => {
-            const returns = cards.map(card => ({
-              card,
-              dest: card.type === "troop" ? "troop" : "tactics",
-            }));
-            onMove({ action: "scout_return", returns });
-            resetSelection();
           }}
           onCancel={resetSelection}
         />

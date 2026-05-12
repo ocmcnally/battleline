@@ -128,10 +128,13 @@ export default function CardTile({
       onDragEnd={onDragEnd}
     >
       <span style={{
-        color: tacColor, fontSize: "0.62rem",
+        color: tacColor, fontSize: "0.55rem",
         textAlign: "center", lineHeight: 1.3,
-        padding: "0 4px", fontWeight: 800,
+        padding: "0 3px", fontWeight: 800,
         textTransform: "uppercase",
+        wordBreak: "break-word",
+        overflowWrap: "break-word",
+        width: "100%",
       }}>
         {card.name}
       </span>

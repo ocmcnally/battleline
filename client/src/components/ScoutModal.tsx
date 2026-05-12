@@ -123,16 +123,15 @@ export function ScoutSplitModal({ troopDeckSize, tacticsDeckSize, onConfirm, onC
   );
 }
 
-// ── Phase 2: return 2 cards ──────────────────────────────────────────────────
+// ── Phase 2: return 2 cards (inline panel, no overlay) ───────────────────────
 
 interface ReturnProps {
   hand:      CardData[];
   preHand:   CardData[];   // hand snapshot before scout_reveal was sent
   onConfirm: (cards: CardData[]) => void;
-  onCancel:  () => void;
 }
 
-export function ScoutReturnModal({ hand, preHand, onConfirm, onCancel }: ReturnProps) {
+export function ScoutReturnPanel({ hand, preHand, onConfirm }: ReturnProps) {
   const [selected, setSelected] = useState<CardData[]>([]);
 
   const newCards = preHand.length > 0 ? diffHands(preHand, hand) : [];
@@ -151,95 +150,85 @@ export function ScoutReturnModal({ hand, preHand, onConfirm, onCancel }: ReturnP
 
   if (waiting) {
     return (
-      <div style={MODAL}>
-        <div style={{ ...PANEL, color: "var(--text-dim)", fontSize: "0.9rem" }}>
-          Drawing cards…
-        </div>
+      <div style={{ padding: "10px 16px", color: "var(--text-dim)", fontSize: "0.85rem" }}>
+        Drawing cards…
       </div>
     );
   }
 
   return (
-    <div style={MODAL}>
-      <div style={{ ...PANEL, maxWidth: 520 }}>
-        <div style={{ fontWeight: 800, fontSize: "1rem", marginBottom: 14, color: "var(--accent)" }}>
-          SCOUT
-        </div>
+    <div style={{ padding: "10px 16px 18px" }}>
+      {/* Header row */}
+      <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 10 }}>
+        <span style={{ fontWeight: 800, fontSize: "0.9rem", color: "var(--accent)" }}>
+          SCOUT — return 2 cards
+        </span>
 
-        {/* Newly drawn cards */}
+        {/* Newly drawn cards inline */}
         {newCards.length > 0 && (
-          <div style={{
-            background: "rgba(74,140,64,0.08)", border: "1.5px solid rgba(74,140,64,0.3)",
-            borderRadius: 8, padding: "10px 14px", marginBottom: 18,
-          }}>
-            <div style={{ fontSize: "0.75rem", fontWeight: 700, color: "var(--claimed-me)", marginBottom: 8 }}>
-              You drew {newCards.length} card{newCards.length !== 1 ? "s" : ""}:
-            </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: "0.7rem", fontWeight: 700, color: "var(--claimed-me)" }}>
+              Drew:
+            </span>
+            <div style={{ display: "flex", gap: 4 }}>
               {newCards.map((card, i) => <CardTile key={i} card={card} />)}
             </div>
           </div>
         )}
 
-        {/* Return picker */}
-        <div style={{ fontSize: "0.8rem", color: "var(--text-dim)", marginBottom: 12 }}>
-          Select 2 cards to return. Each goes back to its natural deck automatically.
-          {selected.length > 0 && (
-            <span style={{ color: "var(--text)", fontWeight: 700 }}>
-              {" "}({2 - selected.length} more)
-            </span>
-          )}
-        </div>
+        <span style={{ fontSize: "0.75rem", color: "var(--text-dim)", marginLeft: "auto" }}>
+          {selected.length < 2
+            ? `Select ${2 - selected.length} more to return`
+            : "Ready to return"}
+        </span>
 
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 18 }}>
-          {hand.map((card, i) => {
-            const isSel  = selected.includes(card);
-            const isNew  = newCards.includes(card);
-            const dest   = autoDest(card);
-            return (
-              <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-                <div style={{ position: "relative" }}>
-                  <CardTile
-                    card={card}
-                    selected={isSel}
-                    highlighted={isNew && !isSel}
-                    onClick={() => toggle(card)}
-                  />
-                  {isNew && !isSel && (
-                    <div style={{
-                      position: "absolute", top: -6, right: -6,
-                      background: "var(--claimed-me)", color: "#fff",
-                      fontSize: "0.5rem", fontWeight: 800, padding: "1px 4px", borderRadius: 3,
-                    }}>
-                      NEW
-                    </div>
-                  )}
-                </div>
-                {isSel && (
+        <button
+          disabled={!ready}
+          onClick={() => ready && onConfirm(selected)}
+          style={btnConfirm(ready)}
+        >
+          Return
+        </button>
+      </div>
+
+      {/* Hand cards */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        {hand.map((card, i) => {
+          const isSel = selected.includes(card);
+          const isNew = newCards.includes(card);
+          const dest  = autoDest(card);
+          return (
+            <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+              <div style={{ position: "relative" }}>
+                <CardTile
+                  card={card}
+                  selected={isSel}
+                  highlighted={isNew && !isSel}
+                  onClick={() => toggle(card)}
+                />
+                {isNew && !isSel && (
                   <div style={{
-                    fontSize: "0.6rem", fontWeight: 700,
-                    color: dest === "troop" ? "var(--suit-blue)" : "var(--accent)",
-                    background: dest === "troop" ? "rgba(30,95,160,0.1)" : "rgba(201,106,42,0.1)",
-                    padding: "2px 6px", borderRadius: 4, whiteSpace: "nowrap",
+                    position: "absolute", top: -6, right: -6,
+                    background: "var(--claimed-me)", color: "#fff",
+                    fontSize: "0.5rem", fontWeight: 800, padding: "1px 4px", borderRadius: 3,
                   }}>
-                    → {dest === "troop" ? "Troop" : "Tactics"}
+                    NEW
                   </div>
                 )}
               </div>
-            );
-          })}
-        </div>
-
-        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-          <button onClick={onCancel} style={BTN_CANCEL}>Cancel</button>
-          <button
-            disabled={!ready}
-            onClick={() => ready && onConfirm(selected)}
-            style={btnConfirm(ready)}
-          >
-            Return
-          </button>
-        </div>
+              {isSel && (
+                <div style={{
+                  fontSize: "0.6rem", fontWeight: 700,
+                  color: dest === "troop" ? "var(--suit-blue)" : "var(--accent)",
+                  background: dest === "troop" ? "rgba(30,95,160,0.1)" : "rgba(201,106,42,0.1)",
+                  padding: "2px 6px", borderRadius: 4, whiteSpace: "nowrap",
+                }}>
+                  → {dest === "troop" ? "Troop" : "Tactics"}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

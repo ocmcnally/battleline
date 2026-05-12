@@ -109,8 +109,8 @@ export default function TotemColumn({
   const envLabel = [fog && "FOG", mud && "MUD"].filter(Boolean).join(" · ") || undefined;
   const showRing  = isHovered && canDrop;
 
-  const myCardsClickable  = boardMode === "redeploy_pick";
-  const oppCardsClickable = boardMode === "traitor_pick" || boardMode === "deserter_pick";
+  const myCardsClickable  = boardMode === "redeploy_pick" && claimed_by === null;
+  const oppCardsClickable = (boardMode === "traitor_pick" || boardMode === "deserter_pick") && claimed_by === null;
 
   // Fade columns that can't accept this drag
   const columnOpacity = isDragging && !canDrop && claimed_by === null ? 0.4 : 1;
