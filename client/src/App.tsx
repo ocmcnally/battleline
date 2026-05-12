@@ -6,15 +6,17 @@ import LandingPage from "./components/LandingPage";
 import LobbyPage from "./components/LobbyPage";
 import WaitingRoom from "./components/WaitingRoom";
 import GameBoard from "./components/GameBoard";
+import UsernameSetup from "./components/UsernameSetup";
 
 // ── Screen state machine ───────────────────────────────────────────────────────
 
 type Phase =
   | { screen: "loading" }
   | { screen: "landing" }
-  | { screen: "lobby";   user: User }
-  | { screen: "waiting"; user: User; gameId: string }
-  | { screen: "game";    user: User; gameId: string };
+  | { screen: "username_setup"; user: User }
+  | { screen: "lobby";          user: User }
+  | { screen: "waiting";        user: User; gameId: string }
+  | { screen: "game";           user: User; gameId: string };
 
 export default function App() {
   const [phase, setPhase] = useState<Phase>({ screen: "loading" });
@@ -35,14 +37,39 @@ export default function App() {
             session.user.email?.split("@")[0] ??
             "Player";
 
+          const user: User = { displayName, token: session.user.id, rating: null, provisional: true };
+
           setPhase(prev =>
             prev.screen === "loading" || prev.screen === "landing"
-              ? { screen: "lobby", user: { displayName, token: session.user.id } }
+              ? { screen: "lobby", user }
               : prev
           );
 
-          // Sync the profiles table in the background — never blocks the UI
-          getOrCreateProfile(session).catch(console.error);
+          // Apply saved profile data (display name + rating) and redirect to setup if needed
+          getOrCreateProfile(session).then(profile => {
+            if (!profile) return;
+            const PROVISIONAL_THRESHOLD = 10;
+            const updatedUser: User = {
+              token:       session.user.id,
+              displayName: profile.username_customized ? profile.display_name : displayName,
+              rating:      profile.rating ?? null,
+              provisional: (profile.games_played ?? 0) < PROVISIONAL_THRESHOLD,
+            };
+            if (!profile.username_customized) {
+              setPhase(prev =>
+                prev.screen === "lobby"
+                  ? { screen: "username_setup", user: updatedUser }
+                  : prev
+              );
+            } else {
+              setPhase(prev => {
+                if (prev.screen === "lobby" || prev.screen === "waiting" || prev.screen === "game") {
+                  return { ...prev, user: updatedUser } as Phase;
+                }
+                return prev;
+              });
+            }
+          }).catch(console.error);
         }
       }
     );
@@ -104,6 +131,16 @@ export default function App() {
 
     case "landing":
       return <LandingPage />;
+
+    case "username_setup":
+      return (
+        <UsernameSetup
+          user={phase.user}
+          onComplete={(displayName) =>
+            setPhase({ screen: "lobby", user: { ...phase.user, displayName, rating: 1500, provisional: true } })
+          }
+        />
+      );
 
     case "lobby":
       return (

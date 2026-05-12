@@ -8,19 +8,42 @@ from battleline import (
 
 
 class PendingGame:
-    def __init__(self, game_id: str, token: str, username: str):
-        self.game_id    = game_id
-        self.token      = token
-        self.username   = username
-        self.created_at = time.time()
+    def __init__(self, game_id: str, token: str, username: str,
+                 time_ms: int | None = None, increment_ms: int = 0,
+                 rated: bool = True, creator_rating: dict | None = None):
+        self.game_id        = game_id
+        self.token          = token
+        self.username       = username
+        self.created_at     = time.time()
+        self.time_ms        = time_ms
+        self.increment_ms   = increment_ms
+        self.rated          = rated
+        self.creator_rating = creator_rating  # {"rating": int, "provisional": bool} | None
 
 
 class GameSession:
-    def __init__(self, game: BattleLineGame, tokens: list[str], game_id: str):
+    def __init__(self, game: BattleLineGame, tokens: list[str], game_id: str,
+                 time_ms: int | None = None, increment_ms: int = 0, rated: bool = True):
         self.game = game
         self.tokens = tokens          # [token_p0, token_p1]
         self.id = game_id
         self.pending_scout: int | None = None
+        self.time_remaining_ms: list[int] | None = [time_ms, time_ms] if time_ms else None
+        self.increment_ms     = increment_ms
+        self.last_turn_start: float = time.time()
+        self.rated            = rated
+        self.ratings_settled  = False
+
+    def clock_state(self, pov: int) -> dict | None:
+        if self.time_remaining_ms is None:
+            return None
+        opp = 1 - pov
+        return {
+            "my_remaining_ms":    self.time_remaining_ms[pov],
+            "opp_remaining_ms":   self.time_remaining_ms[opp],
+            "last_turn_start_ms": int(self.last_turn_start * 1000),
+            "increment_ms":       self.increment_ms,
+        }
 
 
 class GameManager:
@@ -34,19 +57,18 @@ class GameManager:
 
     # ── Lobby / game creation ─────────────────────────────────────────────────
 
-    def create_game(self, token: str, username: str) -> str:
-        # If token already has a pending game, cancel it first
+    def create_game(self, token: str, username: str,
+                    time_ms: int | None = None, increment_ms: int = 0,
+                    rated: bool = True, creator_rating: dict | None = None) -> str:
         self.cancel_pending(token)
         game_id = str(uuid.uuid4())[:8].upper()
-        self._pending[game_id] = PendingGame(game_id, token, username)
+        self._pending[game_id] = PendingGame(
+            game_id, token, username, time_ms, increment_ms, rated, creator_rating,
+        )
         self._token_pending[token] = game_id
         return game_id
 
     def join_game(self, token: str, username: str, game_id: str) -> tuple[bool, str]:
-        """
-        Returns (success, error_message).
-        On success the GameSession is created and both tokens are registered.
-        """
         pending = self._pending.get(game_id)
         if not pending:
             return False, "Game not found or already started."
@@ -57,7 +79,8 @@ class GameManager:
         self._token_pending.pop(pending.token, None)
 
         game = BattleLineGame([pending.username, username])
-        session = GameSession(game, [pending.token, token], game_id)
+        session = GameSession(game, [pending.token, token], game_id,
+                              pending.time_ms, pending.increment_ms, pending.rated)
         self.sessions[game_id] = session
         self.token_to_game[pending.token] = game_id
         self.token_to_game[token] = game_id
@@ -66,12 +89,26 @@ class GameManager:
         return True, ""
 
     def list_open_games(self) -> list[dict]:
+        def time_label(p: PendingGame) -> str:
+            if p.time_ms is None:
+                return "Unlimited"
+            total_secs = p.time_ms // 1000
+            m, s = divmod(total_secs, 60)
+            label = f"{m}:{s:02d}"
+            if p.increment_ms > 0:
+                label += f" +{p.increment_ms // 1000}s"
+            return label
+
         return sorted(
             [
                 {
-                    "game_id":    p.game_id,
-                    "creator":    p.username,
-                    "created_at": p.created_at,
+                    "game_id":            p.game_id,
+                    "creator":            p.username,
+                    "created_at":         p.created_at,
+                    "time_label":         time_label(p),
+                    "rated":              p.rated,
+                    "creator_rating":     p.creator_rating["rating"]      if p.creator_rating else None,
+                    "creator_provisional": p.creator_rating["provisional"] if p.creator_rating else None,
                 }
                 for p in self._pending.values()
             ],
@@ -113,6 +150,9 @@ class GameManager:
             return "Game is already over.", False
 
         is_scout_return = move.get("action") == "scout_return"
+        is_scout_reveal = move.get("action") == "scout_reveal"
+        turn_completing  = not is_scout_reveal
+
         if is_scout_return:
             if session.pending_scout != player_idx:
                 return "Not waiting for a scout return from you.", False
@@ -120,12 +160,28 @@ class GameManager:
             if game.turn % 2 != player_idx:
                 return "Not your turn.", False
 
+        # Enforce clock for turn-completing moves (scout_reveal is part 1; clock ticks on return)
+        if session.time_remaining_ms is not None and turn_completing:
+            elapsed_ms = int((time.time() - session.last_turn_start) * 1000)
+            if elapsed_ms >= session.time_remaining_ms[player_idx]:
+                session.time_remaining_ms[player_idx] = 0
+                game.winner = 1 - player_idx
+                return "Time's up!", True
+
         try:
             msg, needs_draw = self._dispatch(session, player_idx, move)
             if needs_draw:
                 from_tactics = move.get("draw_from_tactics", False)
                 game.draw_card(player_idx, from_tactics)
                 game.turn += 1
+
+            # Deduct time and add increment after a successful turn-completing move
+            if session.time_remaining_ms is not None and turn_completing:
+                elapsed_ms = int((time.time() - session.last_turn_start) * 1000)
+                remaining = session.time_remaining_ms[player_idx] - elapsed_ms
+                session.time_remaining_ms[player_idx] = max(0, remaining + session.increment_ms)
+                session.last_turn_start = time.time()
+
             return msg, True
         except (ValueError, KeyError, IndexError) as e:
             return str(e), False

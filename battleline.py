@@ -332,7 +332,7 @@ class BattleLineGame:
         self.turn          = 0
         self.winner        = None
         self.tactics_played  = [0, 0]   # tactics cards played by each player
-        self.leaders_in_play = set()    # "alexander" and/or "darius"
+        self.leaders_in_play = [set(), set()]  # per-player: "alexander" and/or "darius"
         self.discarded       = []       # public discard pile
 
         for _ in range(HAND_SIZE):
@@ -432,7 +432,7 @@ class BattleLineGame:
             raise ValueError("Can't play tactics: you're already 1 ahead of opponent.")
         if tactic.is_leader:
             other = LEADERS - {tactic.name}
-            if any(l in self.leaders_in_play for l in other):
+            if any(l in self.leaders_in_play[player] for l in other):
                 raise ValueError("Cannot play both Alexander and Darius.")
         if tactic.name == "wild8" and value != 8:
             raise ValueError("Wild 8 must have value 8.")
@@ -449,7 +449,7 @@ class BattleLineGame:
         totem.play_card(player, WildCard(tactic.name, suit, value))
         self.tactics_played[player] += 1
         if tactic.is_leader:
-            self.leaders_in_play.add(tactic.name)
+            self.leaders_in_play[player].add(tactic.name)
 
         newly = self._check_claims(player)
         self.winner = self.get_winner()
@@ -465,7 +465,7 @@ class BattleLineGame:
             raise ValueError("Can't play tactics: you're already 1 ahead of opponent.")
         if tactic.is_leader:
             other = LEADERS - {tactic.name}
-            if any(l in self.leaders_in_play for l in other):
+            if any(l in self.leaders_in_play[player] for l in other):
                 raise ValueError("Cannot play both Alexander and Darius.")
         totem = self.totems[totem_index]
         if totem.claimed is not None:
@@ -477,7 +477,7 @@ class BattleLineGame:
         totem.play_card(player, UnassignedWild(tactic.name))
         self.tactics_played[player] += 1
         if tactic.is_leader:
-            self.leaders_in_play.add(tactic.name)
+            self.leaders_in_play[player].add(tactic.name)
 
         newly = self._check_claims(player)
         self.winner = self.get_winner()
@@ -702,7 +702,7 @@ def ai_choose_move(game: BattleLineGame, player: int):
                 continue
             if tac.is_leader:
                 other = LEADERS - {tac.name}
-                if any(l in game.leaders_in_play for l in other):
+                if any(l in game.leaders_in_play[player] for l in other):
                     continue
             if tac.name == "wild8":
                 combos = [(s, 8) for s in SUITS]
@@ -736,7 +736,7 @@ def ai_choose_move(game: BattleLineGame, player: int):
         # Only tactics left — play first wild if possible
         for tac in hand:
             if isinstance(tac, TacticsCard) and tac.is_wild and game.can_play_tactics(player):
-                if tac.is_leader and any(l in game.leaders_in_play
+                if tac.is_leader and any(l in game.leaders_in_play[player]
                                          for l in LEADERS - {tac.name}):
                     continue
                 for ti, totem in enumerate(game.totems):

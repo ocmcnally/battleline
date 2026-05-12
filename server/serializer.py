@@ -53,6 +53,6 @@ def game_view(game: BattleLineGame, pov: int) -> dict:
         "winner": winner,
         "my_tactics_played": game.tactics_played[pov],
         "opp_tactics_played": game.tactics_played[opp],
-        "leaders_in_play": list(game.leaders_in_play),
+        "leaders_in_play": list(game.leaders_in_play[pov]),
         "names": {"me": game.names[pov], "opp": game.names[opp]},
     }

@@ -28,7 +28,10 @@ Client → Server
   { action:"ping" }
 """
 
+import asyncio
 import os
+from dotenv import load_dotenv
+load_dotenv()
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -37,6 +40,7 @@ from pydantic import BaseModel
 from .game_manager import GameManager
 from .ws_manager import ConnectionManager
 from .serializer import game_view
+from .ratings import settle_game, get_display_rating
 
 app = FastAPI(title="Battle Line")
 
@@ -54,15 +58,52 @@ cm = ConnectionManager()
 # ── Pydantic request bodies ───────────────────────────────────────────────────
 
 class GameRequest(BaseModel):
-    token:    str
-    username: str
+    token:        str
+    username:     str
+    time_ms:      int | None = None
+    increment_ms: int        = 0
+    rated:        bool       = True
 
 
 # ── HTTP ──────────────────────────────────────────────────────────────────────
 
+async def _maybe_settle_ratings(session) -> None:
+    if not session.rated or session.ratings_settled or session.game.winner is None:
+        return
+    session.ratings_settled = True
+    winner_token = session.tokens[session.game.winner]
+    loser_token  = session.tokens[1 - session.game.winner]
+    await settle_game(winner_token, loser_token)
+
+
+async def clock_watcher(game_id: str):
+    """Background task that enforces time limits and notifies players on timeout."""
+    while True:
+        session = gm.sessions.get(game_id)
+        if not session or session.time_remaining_ms is None:
+            break
+        if session.game.winner is not None:
+            break
+
+        current = session.game.turn % 2
+        elapsed_ms = int((__import__("time").time() - session.last_turn_start) * 1000)
+        remaining = session.time_remaining_ms[current] - elapsed_ms
+
+        if remaining <= 0:
+            session.time_remaining_ms[current] = 0
+            session.game.winner = 1 - current
+            await cm.broadcast_state(session)
+            await _maybe_settle_ratings(session)
+            break
+
+        await asyncio.sleep(min(remaining / 1000.0, 1.0))
+
+
 @app.post("/games")
 async def create_game(req: GameRequest):
-    game_id = gm.create_game(req.token, req.username)
+    creator_rating = await get_display_rating(req.token) if req.rated else None
+    game_id = gm.create_game(req.token, req.username, req.time_ms, req.increment_ms,
+                              req.rated, creator_rating)
     return {"game_id": game_id}
 
 
@@ -77,8 +118,9 @@ async def join_game(game_id: str, req: GameRequest):
     if not ok:
         raise HTTPException(400, err)
     session = gm.sessions[game_id]
-    # Notify creator (already on WS) that opponent joined
     await cm.notify_matched(session)
+    if session.time_remaining_ms is not None:
+        asyncio.create_task(clock_watcher(game_id))
     return {"game_id": game_id, "player_idx": gm.token_to_player[req.token]}
 
 
@@ -114,7 +156,7 @@ async def ws_endpoint(ws: WebSocket, token: str = Query(...)):
         await ws.send_json({
             "type": "state",
             "game_id": session.id,
-            "state": game_view(session.game, player_idx),
+            "state": cm._build_state(session, player_idx),
         })
     else:
         # Could be a pending game (creator waiting) or unknown token
@@ -132,6 +174,7 @@ async def ws_endpoint(ws: WebSocket, token: str = Query(...)):
                     r = gm.get_session(token)
                     if r:
                         await cm.broadcast_state(r[0])
+                        await _maybe_settle_ratings(r[0])
                 else:
                     await ws.send_json({"type": "error", "message": msg})
 

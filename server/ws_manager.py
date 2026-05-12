@@ -25,23 +25,28 @@ class ConnectionManager:
             except Exception:
                 self.disconnect(token)
 
+    def _build_state(self, session: GameSession, pov: int) -> dict:
+        state = game_view(session.game, pov)
+        clock = session.clock_state(pov)
+        if clock:
+            state["clock"] = clock
+        return state
+
     async def broadcast_state(self, session: GameSession):
         """Push a player-POV state snapshot to both participants."""
         for idx, token in enumerate(session.tokens):
-            state = game_view(session.game, idx)
             await self.send(token, {
                 "type": "state",
                 "game_id": session.id,
-                "state": state,
+                "state": self._build_state(session, idx),
             })
 
     async def notify_matched(self, session: GameSession):
         """Tell both players the game has started."""
         for idx, token in enumerate(session.tokens):
-            state = game_view(session.game, idx)
             await self.send(token, {
                 "type": "game_start",
                 "game_id": session.id,
                 "player_idx": idx,
-                "state": state,
+                "state": self._build_state(session, idx),
             })

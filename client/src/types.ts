@@ -31,6 +31,7 @@ export interface GameState {
   opp_tactics_played: number;
   leaders_in_play:   string[];
   names:             { me: string; opp: string };
+  clock:             ClockState | null;
 }
 
 // ── WebSocket messages ────────────────────────────────────────────────────────
@@ -45,14 +46,27 @@ export type WsMessage =
 // ── Auth (dummy for now) ──────────────────────────────────────────────────────
 
 export interface User {
-  displayName: string;
-  token: string;   // client-generated UUID, used as player identifier
+  displayName:  string;
+  token:        string;
+  rating:       number | null;
+  provisional:  boolean;
 }
 
 // ── Lobby ─────────────────────────────────────────────────────────────────────
 
+export interface ClockState {
+  my_remaining_ms:    number;
+  opp_remaining_ms:   number;
+  last_turn_start_ms: number;
+  increment_ms:       number;
+}
+
 export interface OpenGame {
-  game_id:    string;
-  creator:    string;
-  created_at: number;
+  game_id:             string;
+  creator:             string;
+  created_at:          number;
+  time_label:          string;
+  rated:               boolean;
+  creator_rating:      number | null;
+  creator_provisional: boolean | null;
 }

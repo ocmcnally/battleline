@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { GameState, CardData, TacticsCard } from "../types";
 import Board from "./Board";
 import Hand from "./Hand";
+import Clock from "./Clock";
 import { ScoutSplitModal, ScoutReturnPanel } from "./ScoutModal";
 
 // ── Phase machine ─────────────────────────────────────────────────────────────
@@ -318,7 +319,10 @@ export default function GameBoard({ state, onMove, error, onLeave }: Props) {
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
           <span style={{ fontWeight: 700, color: turnColor }}>{turnLabel}</span>
+          {state.clock && <Clock clock={state.clock} myTurn={my_turn} />}
+        </div>
           {winner !== null && (
             <button
               onClick={onLeave}

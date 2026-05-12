@@ -15,12 +15,37 @@ function timeAgo(ts: number): string {
   return `${Math.floor(secs / 60)}m ago`;
 }
 
+type TimeControl = "unlimited" | "bullet" | "blitz" | "rapid";
+
+// All values in seconds; step is always 30s
+const TC_RANGES: Record<Exclude<TimeControl, "unlimited">, { min: number; max: number; default: number }> = {
+  bullet: { min: 120, max: 270, default: 180 },
+  blitz:  { min: 300, max: 570, default: 420 },
+  rapid:  { min: 600, max: 1200, default: 900 },
+};
+
+function formatSecs(s: number): string {
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${m}:${String(sec).padStart(2, "0")}`;
+}
+
+function formatRating(rating: number | null, provisional: boolean | null): string {
+  if (rating === null) return "?";
+  return provisional ? `${Math.round(rating)}??` : `${Math.round(rating)}`;
+}
+
 export default function LobbyPage({ user, onCreateGame, onJoinGame, onSignOut }: Props) {
   const [openGames, setOpenGames] = useState<OpenGame[]>([]);
   const [codeInput, setCodeInput] = useState("");
   const [creating, setCreating]   = useState(false);
-  const [joining, setJoining]     = useState<string | null>(null); // game_id being joined
+  const [joining, setJoining]     = useState<string | null>(null);
   const [error, setError]         = useState<string | null>(null);
+
+  const [timeControl,    setTimeControl]    = useState<TimeControl>("unlimited");
+  const [timeSecs,       setTimeSecs]       = useState(180);
+  const [incrementSecs,  setIncrementSecs]  = useState(0);
+  const [rated,          setRated]          = useState(true);
 
   const fetchGames = useCallback(async () => {
     try {
@@ -39,6 +64,8 @@ export default function LobbyPage({ user, onCreateGame, onJoinGame, onSignOut }:
     return () => clearInterval(id);
   }, [fetchGames]);
 
+  const timeMsForCreate = timeControl === "unlimited" ? null : timeSecs * 1000;
+
   async function handleCreate() {
     setCreating(true);
     setError(null);
@@ -46,7 +73,13 @@ export default function LobbyPage({ user, onCreateGame, onJoinGame, onSignOut }:
       const res = await fetch("/games", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: user.token, username: user.displayName }),
+        body: JSON.stringify({
+          token: user.token,
+          username: user.displayName,
+          time_ms: timeMsForCreate,
+          increment_ms: incrementSecs * 1000,
+          rated,
+        }),
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json() as { game_id: string };
@@ -98,6 +131,11 @@ export default function LobbyPage({ user, onCreateGame, onJoinGame, onSignOut }:
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
           <span style={{ color: "var(--text-dim)", fontSize: "0.9rem" }}>
             {user.displayName}
+            {user.rating !== null && (
+              <span style={{ marginLeft: 8, color: "var(--accent)", fontWeight: 700, fontFamily: "monospace" }}>
+                {formatRating(user.rating, user.provisional)}
+              </span>
+            )}
           </span>
           <button
             onClick={onSignOut}
@@ -128,26 +166,119 @@ export default function LobbyPage({ user, onCreateGame, onJoinGame, onSignOut }:
         <div style={{
           background: "var(--surface)", borderRadius: 12, padding: "28px 32px",
           border: "1px solid var(--surface2)", marginBottom: 32,
-          display: "flex", justifyContent: "space-between", alignItems: "center", gap: 24,
         }}>
-          <div>
-            <h2 style={{ fontSize: "1.2rem", marginBottom: 6 }}>Start a New Game</h2>
-            <p style={{ color: "var(--text-dim)", fontSize: "0.9rem", maxWidth: 360 }}>
-              Create a private game and share the code with a friend, or wait for
-              someone to join from the open games list.
-            </p>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 24, marginBottom: 24 }}>
+            <div>
+              <h2 style={{ fontSize: "1.2rem", marginBottom: 6 }}>Start a New Game</h2>
+              <p style={{ color: "var(--text-dim)", fontSize: "0.9rem", maxWidth: 360 }}>
+                Create a private game and share the code with a friend, or wait for
+                someone to join from the open games list.
+              </p>
+            </div>
+            <button
+              onClick={handleCreate}
+              disabled={creating}
+              style={{
+                background: "var(--accent)", color: "#fff", fontWeight: 700,
+                fontSize: "1rem", padding: "12px 28px", flexShrink: 0,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {creating ? "Creating…" : "Create Game →"}
+            </button>
           </div>
-          <button
-            onClick={handleCreate}
-            disabled={creating}
-            style={{
-              background: "var(--accent)", color: "#fff", fontWeight: 700,
-              fontSize: "1rem", padding: "12px 28px", flexShrink: 0,
-              whiteSpace: "nowrap",
-            }}
-          >
-            {creating ? "Creating…" : "Create Game →"}
-          </button>
+
+          {/* Time control settings */}
+          <div style={{ borderTop: "1px solid var(--surface2)", paddingTop: 20 }}>
+            <div style={{ fontSize: "0.78rem", fontWeight: 700, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 10 }}>
+              Time Control
+            </div>
+
+            {/* Preset buttons */}
+            <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+              {(["unlimited", "bullet", "blitz", "rapid"] as TimeControl[]).map(tc => (
+                <button
+                  key={tc}
+                  onClick={() => {
+                    setTimeControl(tc);
+                    if (tc !== "unlimited") setTimeSecs(TC_RANGES[tc].default);
+                  }}
+                  style={{
+                    padding: "6px 16px", borderRadius: 6, fontWeight: 600, fontSize: "0.85rem",
+                    cursor: "pointer", textTransform: "capitalize",
+                    background: timeControl === tc ? "var(--accent)" : "var(--bg)",
+                    color:      timeControl === tc ? "#fff" : "var(--text-dim)",
+                    border:     timeControl === tc ? "1.5px solid var(--accent)" : "1.5px solid var(--surface2)",
+                  }}
+                >
+                  {tc === "bullet" ? "Bullet" : tc === "blitz" ? "Blitz" : tc === "rapid" ? "Rapid" : "Unlimited"}
+                </button>
+              ))}
+            </div>
+
+            {/* Time slider (hidden for unlimited) */}
+            {timeControl !== "unlimited" && (
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+                <span style={{ fontSize: "0.8rem", color: "var(--text-dim)", width: 120 }}>
+                  Time per player:
+                </span>
+                <input
+                  type="range"
+                  min={TC_RANGES[timeControl].min}
+                  max={TC_RANGES[timeControl].max}
+                  step={30}
+                  value={timeSecs}
+                  onChange={e => setTimeSecs(Number(e.target.value))}
+                  style={{ flex: 1 }}
+                />
+                <span style={{ fontSize: "0.9rem", fontWeight: 700, width: 48, textAlign: "right" }}>
+                  {formatSecs(timeSecs)}
+                </span>
+              </div>
+            )}
+
+            {/* Increment slider */}
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
+              <span style={{ fontSize: "0.8rem", color: "var(--text-dim)", width: 120 }}>
+                Increment:
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={30}
+                value={incrementSecs}
+                onChange={e => setIncrementSecs(Number(e.target.value))}
+                style={{ flex: 1 }}
+              />
+              <span style={{ fontSize: "0.9rem", fontWeight: 700, width: 48, textAlign: "right" }}>
+                {incrementSecs === 0 ? "None" : `+${incrementSecs}s`}
+              </span>
+            </div>
+
+            {/* Rated toggle */}
+            <div style={{ borderTop: "1px solid var(--surface2)", paddingTop: 16 }}>
+              <div style={{ fontSize: "0.78rem", fontWeight: 700, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 10 }}>
+                Game Type
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                {([true, false] as const).map(r => (
+                  <button
+                    key={String(r)}
+                    onClick={() => setRated(r)}
+                    style={{
+                      padding: "6px 20px", borderRadius: 6, fontWeight: 600, fontSize: "0.85rem",
+                      cursor: "pointer",
+                      background: rated === r ? "var(--accent)" : "var(--bg)",
+                      color:      rated === r ? "#fff" : "var(--text-dim)",
+                      border:     rated === r ? "1.5px solid var(--accent)" : "1.5px solid var(--surface2)",
+                    }}
+                  >
+                    {r ? "Rated" : "Unrated"}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* Join by code */}
@@ -212,10 +343,30 @@ export default function LobbyPage({ user, onCreateGame, onJoinGame, onSignOut }:
                     borderRadius: 8, border: "1px solid var(--surface2)",
                   }}
                 >
-                  <div>
+                  <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
                     <span style={{ fontWeight: 600 }}>{g.creator}</span>
-                    <span style={{ color: "var(--text-dim)", fontSize: "0.8rem", marginLeft: 12 }}>
+                    {g.creator_rating !== null && (
+                      <span style={{ fontSize: "0.8rem", color: "var(--accent)", fontFamily: "monospace", fontWeight: 700 }}>
+                        {formatRating(g.creator_rating, g.creator_provisional)}
+                      </span>
+                    )}
+                    <span style={{ color: "var(--text-dim)", fontSize: "0.8rem" }}>
                       {timeAgo(g.created_at)}
+                    </span>
+                    <span style={{
+                      fontSize: "0.75rem", fontWeight: 600,
+                      color: "var(--accent)", background: "rgba(201,106,42,0.1)",
+                      padding: "2px 8px", borderRadius: 4,
+                    }}>
+                      {g.time_label}
+                    </span>
+                    <span style={{
+                      fontSize: "0.75rem", fontWeight: 600,
+                      color: g.rated ? "#6ab04c" : "var(--text-dim)",
+                      background: g.rated ? "rgba(106,176,76,0.12)" : "rgba(255,255,255,0.05)",
+                      padding: "2px 8px", borderRadius: 4,
+                    }}>
+                      {g.rated ? "Rated" : "Unrated"}
                     </span>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
