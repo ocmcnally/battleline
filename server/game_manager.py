@@ -33,6 +33,7 @@ class GameSession:
         self.last_turn_start: float = time.time()
         self.rated            = rated
         self.ratings_settled  = False
+        self.rating_changes: dict | None = None  # {token: {before, after, ...}}
 
     def clock_state(self, pov: int) -> dict | None:
         if self.time_remaining_ms is None:

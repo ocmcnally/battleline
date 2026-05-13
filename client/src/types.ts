@@ -17,6 +17,13 @@ export interface TotemData {
   cards_to_win: number;
 }
 
+export interface RatingChange {
+  before:             number;
+  after:              number;
+  provisional_before: boolean;
+  provisional_after:  boolean;
+}
+
 export interface GameState {
   my_hand:           CardData[];
   totems:            TotemData[];
@@ -32,6 +39,8 @@ export interface GameState {
   leaders_in_play:   string[];
   names:             { me: string; opp: string };
   clock:             ClockState | null;
+  rated:             boolean;
+  rating_change:     { me: RatingChange | null; opp: RatingChange | null } | null;
 }
 
 // ── WebSocket messages ────────────────────────────────────────────────────────

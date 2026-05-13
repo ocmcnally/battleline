@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { GameState, CardData, TacticsCard } from "../types";
+import type { GameState, CardData, TacticsCard, RatingChange } from "../types";
 import Board from "./Board";
 import Hand from "./Hand";
 import Clock from "./Clock";
@@ -22,6 +22,27 @@ type Phase =
 
 const WILD_TACTICS = new Set(["alexander", "darius", "wild8", "wild321"]);
 const ENV_TACTICS  = new Set(["fog", "mud"]);
+
+function RatingRow({ label, rc }: { label: string; rc: RatingChange | null | undefined }) {
+  if (!rc) return null;
+  const diff = rc.after - rc.before;
+  const sign = diff >= 0 ? "+" : "";
+  const before = rc.provisional_before ? `${rc.before}??` : `${rc.before}`;
+  const after  = rc.provisional_after  ? `${rc.after}??`  : `${rc.after}`;
+  const color  = diff >= 0 ? "#6ab04c" : "var(--claimed-opp)";
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+                  padding: "6px 0", borderBottom: "1px solid var(--surface2)" }}>
+      <span style={{ color: "var(--text-dim)", fontSize: "0.9rem" }}>{label}</span>
+      <span style={{ fontFamily: "monospace", fontWeight: 700 }}>
+        <span style={{ color: "var(--text-dim)" }}>{before}</span>
+        <span style={{ color: "var(--text-dim)", margin: "0 6px" }}>→</span>
+        <span>{after}</span>
+        <span style={{ color, marginLeft: 8 }}>({sign}{diff})</span>
+      </span>
+    </div>
+  );
+}
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -323,17 +344,6 @@ export default function GameBoard({ state, onMove, error, onLeave }: Props) {
           <span style={{ fontWeight: 700, color: turnColor }}>{turnLabel}</span>
           {state.clock && <Clock clock={state.clock} myTurn={my_turn} />}
         </div>
-          {winner !== null && (
-            <button
-              onClick={onLeave}
-              style={{
-                borderRadius: 6, fontWeight: 700, padding: "5px 14px", fontSize: "0.8rem",
-                background: "var(--accent)", color: "#fff", border: "none", cursor: "pointer",
-              }}
-            >
-              Back to Lobby
-            </button>
-          )}
         </div>
 
         <div style={{ fontSize: "0.8rem", color: "var(--text-dim)", textAlign: "right" }}>
@@ -468,6 +478,67 @@ export default function GameBoard({ state, onMove, error, onLeave }: Props) {
           </div>
         )}
       </div>
+
+      {/* Game-over overlay */}
+      {winner !== null && (
+        <div style={{
+          position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)",
+          display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100,
+        }}>
+          <div style={{
+            background: "var(--surface)", borderRadius: 14, padding: "36px 40px",
+            border: "1.5px solid var(--surface2)", minWidth: 340, maxWidth: 420,
+            display: "flex", flexDirection: "column", gap: 0,
+          }}>
+            <div style={{
+              fontSize: "1.6rem", fontWeight: 800, textAlign: "center", marginBottom: 6,
+              color: winner === "me" ? "var(--claimed-me)" : "var(--claimed-opp)",
+            }}>
+              {winner === "me" ? "You Won!" : "You Lost"}
+            </div>
+            <div style={{ textAlign: "center", color: "var(--text-dim)", fontSize: "0.85rem", marginBottom: 20 }}>
+              {names.me} vs {names.opp}
+            </div>
+
+            {state.rated && (
+              <div style={{ marginBottom: 24 }}>
+                {state.rating_change ? (
+                  <>
+                    <RatingRow label={names.me}  rc={state.rating_change.me}  />
+                    <RatingRow label={names.opp} rc={state.rating_change.opp} />
+                  </>
+                ) : (
+                  <div style={{ textAlign: "center", color: "var(--text-dim)", fontSize: "0.85rem", padding: "10px 0" }}>
+                    Updating ratings…
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 10 }}>
+              <button
+                onClick={onLeave}
+                style={{
+                  flex: 1, padding: "10px 0", fontWeight: 700, fontSize: "0.95rem",
+                  background: "var(--accent)", color: "#fff", borderRadius: 8, border: "none", cursor: "pointer",
+                }}
+              >
+                Back to Lobby
+              </button>
+              <button
+                disabled
+                style={{
+                  flex: 1, padding: "10px 0", fontWeight: 700, fontSize: "0.95rem",
+                  background: "var(--surface2)", color: "var(--text-dim)", borderRadius: 8,
+                  border: "none", cursor: "not-allowed", opacity: 0.6,
+                }}
+              >
+                Analyze Game
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Scout split modal */}
       {phase.kind === "scout_split" && (

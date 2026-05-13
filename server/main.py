@@ -73,7 +73,10 @@ async def _maybe_settle_ratings(session) -> None:
     session.ratings_settled = True
     winner_token = session.tokens[session.game.winner]
     loser_token  = session.tokens[1 - session.game.winner]
-    await settle_game(winner_token, loser_token)
+    changes = await settle_game(winner_token, loser_token)
+    if changes:
+        session.rating_changes = changes
+        await cm.broadcast_state(session)
 
 
 async def clock_watcher(game_id: str):

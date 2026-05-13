@@ -30,6 +30,14 @@ class ConnectionManager:
         clock = session.clock_state(pov)
         if clock:
             state["clock"] = clock
+        state["rated"] = session.rated
+        if session.rating_changes:
+            pov_token = session.tokens[pov]
+            opp_token = session.tokens[1 - pov]
+            state["rating_change"] = {
+                "me":  session.rating_changes.get(pov_token),
+                "opp": session.rating_changes.get(opp_token),
+            }
         return state
 
     async def broadcast_state(self, session: GameSession):
