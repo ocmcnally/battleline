@@ -54,7 +54,6 @@ export default function WaitingRoom({ user, gameId, onCancel }: Props) {
 
       {/* Header */}
       <div style={{ textAlign: "center" }}>
-        <div style={{ fontSize: "2.5rem", marginBottom: 12 }}>⚔️</div>
         <h1 style={{ fontSize: "1.8rem", fontWeight: 800 }}>Game Created</h1>
         <p style={{ color: "var(--text-dim)", marginTop: 6 }}>
           Share the code below with a friend to start playing.

@@ -65,6 +65,7 @@ export default function LobbyPage({ user, onCreateGame, onJoinGame, onSignOut }:
   }, [fetchGames]);
 
   const timeMsForCreate = timeControl === "unlimited" ? null : timeSecs * 1000;
+  const isRated = timeControl !== "unlimited" && rated;
 
   async function handleCreate() {
     setCreating(true);
@@ -77,8 +78,9 @@ export default function LobbyPage({ user, onCreateGame, onJoinGame, onSignOut }:
           token: user.token,
           username: user.displayName,
           time_ms: timeMsForCreate,
-          increment_ms: incrementSecs * 1000,
-          rated,
+          increment_ms: timeControl === "unlimited" ? 0 : incrementSecs * 1000,
+          rated: isRated,
+          category: timeControl === "unlimited" ? null : timeControl,
         }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -126,16 +128,19 @@ export default function LobbyPage({ user, onCreateGame, onJoinGame, onSignOut }:
         background: "var(--surface)",
       }}>
         <span style={{ fontWeight: 800, fontSize: "1.1rem", color: "var(--accent)" }}>
-          ⚔️ Battle Line
+          Battle Line
         </span>
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
           <span style={{ color: "var(--text-dim)", fontSize: "0.9rem" }}>
             {user.displayName}
-            {user.rating !== null && (
-              <span style={{ marginLeft: 8, color: "var(--accent)", fontWeight: 700, fontFamily: "monospace" }}>
-                {formatRating(user.rating, user.provisional)}
-              </span>
-            )}
+            {timeControl !== "unlimited" && (() => {
+              const cr = user.ratings[timeControl];
+              return cr ? (
+                <span style={{ marginLeft: 8, color: "var(--accent)", fontWeight: 700, fontFamily: "monospace" }}>
+                  {formatRating(cr.rating, cr.provisional)}
+                </span>
+              ) : null;
+            })()}
           </span>
           <button
             onClick={onSignOut}
@@ -237,47 +242,51 @@ export default function LobbyPage({ user, onCreateGame, onJoinGame, onSignOut }:
               </div>
             )}
 
-            {/* Increment slider */}
-            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
-              <span style={{ fontSize: "0.8rem", color: "var(--text-dim)", width: 120 }}>
-                Increment:
-              </span>
-              <input
-                type="range"
-                min={0}
-                max={30}
-                value={incrementSecs}
-                onChange={e => setIncrementSecs(Number(e.target.value))}
-                style={{ flex: 1 }}
-              />
-              <span style={{ fontSize: "0.9rem", fontWeight: 700, width: 48, textAlign: "right" }}>
-                {incrementSecs === 0 ? "None" : `+${incrementSecs}s`}
-              </span>
-            </div>
+            {/* Increment slider — hidden for unlimited */}
+            {timeControl !== "unlimited" && (
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
+                <span style={{ fontSize: "0.8rem", color: "var(--text-dim)", width: 120 }}>
+                  Increment:
+                </span>
+                <input
+                  type="range"
+                  min={0}
+                  max={30}
+                  value={incrementSecs}
+                  onChange={e => setIncrementSecs(Number(e.target.value))}
+                  style={{ flex: 1 }}
+                />
+                <span style={{ fontSize: "0.9rem", fontWeight: 700, width: 48, textAlign: "right" }}>
+                  {incrementSecs === 0 ? "None" : `+${incrementSecs}s`}
+                </span>
+              </div>
+            )}
 
-            {/* Rated toggle */}
-            <div style={{ borderTop: "1px solid var(--surface2)", paddingTop: 16 }}>
-              <div style={{ fontSize: "0.78rem", fontWeight: 700, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 10 }}>
-                Game Type
+            {/* Rated toggle — only for timed games */}
+            {timeControl !== "unlimited" && (
+              <div style={{ borderTop: "1px solid var(--surface2)", paddingTop: 16 }}>
+                <div style={{ fontSize: "0.78rem", fontWeight: 700, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 10 }}>
+                  Game Type
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  {([true, false] as const).map(r => (
+                    <button
+                      key={String(r)}
+                      onClick={() => setRated(r)}
+                      style={{
+                        padding: "6px 20px", borderRadius: 6, fontWeight: 600, fontSize: "0.85rem",
+                        cursor: "pointer",
+                        background: rated === r ? "var(--accent)" : "var(--bg)",
+                        color:      rated === r ? "#fff" : "var(--text-dim)",
+                        border:     rated === r ? "1.5px solid var(--accent)" : "1.5px solid var(--surface2)",
+                      }}
+                    >
+                      {r ? "Rated" : "Unrated"}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                {([true, false] as const).map(r => (
-                  <button
-                    key={String(r)}
-                    onClick={() => setRated(r)}
-                    style={{
-                      padding: "6px 20px", borderRadius: 6, fontWeight: 600, fontSize: "0.85rem",
-                      cursor: "pointer",
-                      background: rated === r ? "var(--accent)" : "var(--bg)",
-                      color:      rated === r ? "#fff" : "var(--text-dim)",
-                      border:     rated === r ? "1.5px solid var(--accent)" : "1.5px solid var(--surface2)",
-                    }}
-                  >
-                    {r ? "Rated" : "Unrated"}
-                  </button>
-                ))}
-              </div>
-            </div>
+            )}
           </div>
         </div>
 

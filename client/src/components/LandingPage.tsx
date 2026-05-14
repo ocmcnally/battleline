@@ -25,7 +25,7 @@ export default function LandingPage() {
         alignItems: "center", borderBottom: "1px solid var(--surface2)",
       }}>
         <span style={{ fontWeight: 800, fontSize: "1.1rem", color: "var(--accent)" }}>
-          ⚔️ Battle Line
+          Battle Line
         </span>
         <button
           onClick={signInWithGoogle}

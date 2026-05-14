@@ -35,7 +35,6 @@ export default function LobbyScreen({ onJoin }: Props) {
       justifyContent: "center", height: "100vh", gap: 28,
     }}>
       <div style={{ textAlign: "center" }}>
-        <div style={{ fontSize: "3rem", marginBottom: 8 }}>⚔️</div>
         <h1 style={{ fontSize: "2.2rem", color: "var(--accent)", fontWeight: 800 }}>
           Battle Line
         </h1>

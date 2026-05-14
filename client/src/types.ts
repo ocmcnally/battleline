@@ -40,6 +40,7 @@ export interface GameState {
   names:             { me: string; opp: string };
   clock:             ClockState | null;
   rated:             boolean;
+  category:          RatingCategory | null;
   rating_change:     { me: RatingChange | null; opp: RatingChange | null } | null;
 }
 
@@ -54,11 +55,17 @@ export type WsMessage =
 
 // ── Auth (dummy for now) ──────────────────────────────────────────────────────
 
+export type RatingCategory = "bullet" | "blitz" | "rapid";
+
+export interface CategoryRating {
+  rating:      number;
+  provisional: boolean;
+}
+
 export interface User {
-  displayName:  string;
-  token:        string;
-  rating:       number | null;
-  provisional:  boolean;
+  displayName: string;
+  token:       string;
+  ratings:     Record<RatingCategory, CategoryRating | null>;
 }
 
 // ── Lobby ─────────────────────────────────────────────────────────────────────

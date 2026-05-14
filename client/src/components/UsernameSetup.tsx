@@ -54,7 +54,7 @@ export default function UsernameSetup({ user, onComplete }: Props) {
         boxShadow: "0 8px 32px rgba(0,0,0,0.25)",
       }}>
         <div style={{ fontWeight: 900, fontSize: "1.5rem", color: "var(--accent)", marginBottom: 8 }}>
-          ⚔️ Battle Line
+          Battle Line
         </div>
         <h2 style={{ fontSize: "1.1rem", fontWeight: 700, marginBottom: 6 }}>
           Choose your username

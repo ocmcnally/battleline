@@ -32,6 +32,8 @@ import asyncio
 import os
 from dotenv import load_dotenv
 load_dotenv()
+print(f"[startup] SUPABASE_URL={'set' if os.getenv('SUPABASE_URL') else 'MISSING'}, "
+      f"SUPABASE_SERVICE_KEY={'set' if os.getenv('SUPABASE_SERVICE_KEY') else 'MISSING'}")
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -60,9 +62,10 @@ cm = ConnectionManager()
 class GameRequest(BaseModel):
     token:        str
     username:     str
-    time_ms:      int | None = None
-    increment_ms: int        = 0
-    rated:        bool       = True
+    time_ms:      int | None  = None
+    increment_ms: int         = 0
+    rated:        bool        = True
+    category:     str | None  = None
 
 
 # ── HTTP ──────────────────────────────────────────────────────────────────────
@@ -73,7 +76,7 @@ async def _maybe_settle_ratings(session) -> None:
     session.ratings_settled = True
     winner_token = session.tokens[session.game.winner]
     loser_token  = session.tokens[1 - session.game.winner]
-    changes = await settle_game(winner_token, loser_token)
+    changes = await settle_game(winner_token, loser_token, session.category)
     if changes:
         session.rating_changes = changes
         await cm.broadcast_state(session)
@@ -104,9 +107,9 @@ async def clock_watcher(game_id: str):
 
 @app.post("/games")
 async def create_game(req: GameRequest):
-    creator_rating = await get_display_rating(req.token) if req.rated else None
+    creator_rating = await get_display_rating(req.token, req.category) if req.rated else None
     game_id = gm.create_game(req.token, req.username, req.time_ms, req.increment_ms,
-                              req.rated, creator_rating)
+                              req.rated, req.category, creator_rating)
     return {"game_id": game_id}
 
 

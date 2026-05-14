@@ -30,7 +30,8 @@ class ConnectionManager:
         clock = session.clock_state(pov)
         if clock:
             state["clock"] = clock
-        state["rated"] = session.rated
+        state["rated"]    = session.rated
+        state["category"] = session.category
         if session.rating_changes:
             pov_token = session.tokens[pov]
             opp_token = session.tokens[1 - pov]

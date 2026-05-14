@@ -10,7 +10,8 @@ from battleline import (
 class PendingGame:
     def __init__(self, game_id: str, token: str, username: str,
                  time_ms: int | None = None, increment_ms: int = 0,
-                 rated: bool = True, creator_rating: dict | None = None):
+                 rated: bool = True, category: str | None = None,
+                 creator_rating: dict | None = None):
         self.game_id        = game_id
         self.token          = token
         self.username       = username
@@ -18,22 +19,25 @@ class PendingGame:
         self.time_ms        = time_ms
         self.increment_ms   = increment_ms
         self.rated          = rated
-        self.creator_rating = creator_rating  # {"rating": int, "provisional": bool} | None
+        self.category       = category
+        self.creator_rating = creator_rating
 
 
 class GameSession:
     def __init__(self, game: BattleLineGame, tokens: list[str], game_id: str,
-                 time_ms: int | None = None, increment_ms: int = 0, rated: bool = True):
+                 time_ms: int | None = None, increment_ms: int = 0,
+                 rated: bool = True, category: str | None = None):
         self.game = game
-        self.tokens = tokens          # [token_p0, token_p1]
+        self.tokens = tokens
         self.id = game_id
         self.pending_scout: int | None = None
         self.time_remaining_ms: list[int] | None = [time_ms, time_ms] if time_ms else None
         self.increment_ms     = increment_ms
         self.last_turn_start: float = time.time()
         self.rated            = rated
+        self.category         = category
         self.ratings_settled  = False
-        self.rating_changes: dict | None = None  # {token: {before, after, ...}}
+        self.rating_changes: dict | None = None
 
     def clock_state(self, pov: int) -> dict | None:
         if self.time_remaining_ms is None:
@@ -60,11 +64,12 @@ class GameManager:
 
     def create_game(self, token: str, username: str,
                     time_ms: int | None = None, increment_ms: int = 0,
-                    rated: bool = True, creator_rating: dict | None = None) -> str:
+                    rated: bool = True, category: str | None = None,
+                    creator_rating: dict | None = None) -> str:
         self.cancel_pending(token)
         game_id = str(uuid.uuid4())[:8].upper()
         self._pending[game_id] = PendingGame(
-            game_id, token, username, time_ms, increment_ms, rated, creator_rating,
+            game_id, token, username, time_ms, increment_ms, rated, category, creator_rating,
         )
         self._token_pending[token] = game_id
         return game_id
@@ -81,7 +86,7 @@ class GameManager:
 
         game = BattleLineGame([pending.username, username])
         session = GameSession(game, [pending.token, token], game_id,
-                              pending.time_ms, pending.increment_ms, pending.rated)
+                              pending.time_ms, pending.increment_ms, pending.rated, pending.category)
         self.sessions[game_id] = session
         self.token_to_game[pending.token] = game_id
         self.token_to_game[token] = game_id

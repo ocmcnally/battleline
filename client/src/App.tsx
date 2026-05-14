@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import type { User } from "./types";
-import { supabase, getOrCreateProfile } from "./lib/supabase";
+import { supabase, getOrCreateProfile, profileRatings } from "./lib/supabase";
 import { useGameSocket } from "./hooks/useGameSocket";
 import LandingPage from "./components/LandingPage";
 import LobbyPage from "./components/LobbyPage";
@@ -37,7 +37,7 @@ export default function App() {
             session.user.email?.split("@")[0] ??
             "Player";
 
-          const user: User = { displayName, token: session.user.id, rating: null, provisional: true };
+          const user: User = { displayName, token: session.user.id, ratings: { bullet: null, blitz: null, rapid: null } };
 
           setPhase(prev =>
             prev.screen === "loading" || prev.screen === "landing"
@@ -48,12 +48,10 @@ export default function App() {
           // Apply saved profile data (display name + rating) and redirect to setup if needed
           getOrCreateProfile(session).then(profile => {
             if (!profile) return;
-            const PROVISIONAL_THRESHOLD = 10;
             const updatedUser: User = {
               token:       session.user.id,
               displayName: profile.username_customized ? profile.display_name : displayName,
-              rating:      profile.rating ?? null,
-              provisional: (profile.games_played ?? 0) < PROVISIONAL_THRESHOLD,
+              ratings:     profileRatings(profile),
             };
             if (!profile.username_customized) {
               setPhase(prev =>
@@ -137,7 +135,7 @@ export default function App() {
         <UsernameSetup
           user={phase.user}
           onComplete={(displayName) =>
-            setPhase({ screen: "lobby", user: { ...phase.user, displayName, rating: 1500, provisional: true } })
+            setPhase({ screen: "lobby", user: { ...phase.user, displayName, ratings: { bullet: null, blitz: null, rapid: null } } })
           }
         />
       );
