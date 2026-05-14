@@ -81,8 +81,10 @@ class GameManager:
         if pending.token == token:
             return False, "You cannot join your own game."
 
+        # Remove both the joined game and any pending game the joiner created
         self._pending.pop(game_id)
         self._token_pending.pop(pending.token, None)
+        self.cancel_pending(token)
 
         game = BattleLineGame([pending.username, username])
         session = GameSession(game, [pending.token, token], game_id,
@@ -130,6 +132,13 @@ class GameManager:
             return False
         self._pending.pop(game_id, None)
         return True
+
+    def cleanup_session(self, game_id: str) -> None:
+        session = self.sessions.pop(game_id, None)
+        if session:
+            for token in session.tokens:
+                self.token_to_game.pop(token, None)
+                self.token_to_player.pop(token, None)
 
     # ── Session lookup ────────────────────────────────────────────────────────
 

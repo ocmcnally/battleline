@@ -70,16 +70,21 @@ class GameRequest(BaseModel):
 
 # ── HTTP ──────────────────────────────────────────────────────────────────────
 
-async def _maybe_settle_ratings(session) -> None:
-    if not session.rated or session.ratings_settled or session.game.winner is None:
+async def _finish_game(session) -> None:
+    """Settle ratings (if rated) then schedule session cleanup."""
+    if session.game.winner is None:
         return
-    session.ratings_settled = True
-    winner_token = session.tokens[session.game.winner]
-    loser_token  = session.tokens[1 - session.game.winner]
-    changes = await settle_game(winner_token, loser_token, session.category)
-    if changes:
-        session.rating_changes = changes
-        await cm.broadcast_state(session)
+    if session.rated and not session.ratings_settled:
+        session.ratings_settled = True
+        winner_token = session.tokens[session.game.winner]
+        loser_token  = session.tokens[1 - session.game.winner]
+        changes = await settle_game(winner_token, loser_token, session.category)
+        if changes:
+            session.rating_changes = changes
+            await cm.broadcast_state(session)
+    # Clean up session so it no longer occupies memory
+    await asyncio.sleep(30)   # keep alive briefly so late reconnects still get final state
+    gm.cleanup_session(session.id)
 
 
 async def clock_watcher(game_id: str):
@@ -99,7 +104,7 @@ async def clock_watcher(game_id: str):
             session.time_remaining_ms[current] = 0
             session.game.winner = 1 - current
             await cm.broadcast_state(session)
-            await _maybe_settle_ratings(session)
+            asyncio.create_task(_finish_game(session))
             break
 
         await asyncio.sleep(min(remaining / 1000.0, 1.0))
@@ -180,7 +185,8 @@ async def ws_endpoint(ws: WebSocket, token: str = Query(...)):
                     r = gm.get_session(token)
                     if r:
                         await cm.broadcast_state(r[0])
-                        await _maybe_settle_ratings(r[0])
+                        if r[0].game.winner is not None:
+                            asyncio.create_task(_finish_game(r[0]))
                 else:
                     await ws.send_json({"type": "error", "message": msg})
 
