@@ -4,6 +4,7 @@ import { supabase, getOrCreateProfile, profileRatings } from "./lib/supabase";
 import { useGameSocket } from "./hooks/useGameSocket";
 import LandingPage from "./components/LandingPage";
 import LobbyPage from "./components/LobbyPage";
+import ProfilePage from "./components/ProfilePage";
 import WaitingRoom from "./components/WaitingRoom";
 import GameBoard from "./components/GameBoard";
 import UsernameSetup from "./components/UsernameSetup";
@@ -15,6 +16,7 @@ type Phase =
   | { screen: "landing" }
   | { screen: "username_setup"; user: User }
   | { screen: "lobby";          user: User }
+  | { screen: "profile";        user: User }
   | { screen: "waiting";        user: User; gameId: string }
   | { screen: "game";           user: User; gameId: string };
 
@@ -114,6 +116,11 @@ export default function App() {
     setPhase({ screen: "lobby", user: phase.user });
   }
 
+  function handleViewProfile() {
+    if (phase.screen !== "lobby") return;
+    setPhase({ screen: "profile", user: phase.user });
+  }
+
   // ── Render ───────────────────────────────────────────────────────────────────
 
   switch (phase.screen) {
@@ -147,6 +154,15 @@ export default function App() {
           onCreateGame={handleCreateGame}
           onJoinGame={handleJoinGame}
           onSignOut={handleSignOut}
+          onViewProfile={handleViewProfile}
+        />
+      );
+
+    case "profile":
+      return (
+        <ProfilePage
+          user={phase.user}
+          onBack={() => setPhase({ screen: "lobby", user: phase.user })}
         />
       );
 

@@ -2,10 +2,11 @@ import { useState, useEffect, useCallback } from "react";
 import type { User, OpenGame } from "../types";
 
 interface Props {
-  user:          User;
-  onCreateGame:  (gameId: string) => void;
-  onJoinGame:    (gameId: string) => void;
-  onSignOut:     () => void;
+  user:           User;
+  onCreateGame:   (gameId: string) => void;
+  onJoinGame:     (gameId: string) => void;
+  onSignOut:      () => void;
+  onViewProfile:  () => void;
 }
 
 function timeAgo(ts: number): string {
@@ -32,10 +33,10 @@ function formatSecs(s: number): string {
 
 function formatRating(rating: number | null, provisional: boolean | null): string {
   if (rating === null) return "?";
-  return provisional ? `${Math.round(rating)}??` : `${Math.round(rating)}`;
+  return provisional ? `${Math.round(rating)}?` : `${Math.round(rating)}`;
 }
 
-export default function LobbyPage({ user, onCreateGame, onJoinGame, onSignOut }: Props) {
+export default function LobbyPage({ user, onCreateGame, onJoinGame, onSignOut, onViewProfile }: Props) {
   const [openGames, setOpenGames] = useState<OpenGame[]>([]);
   const [codeInput, setCodeInput] = useState("");
   const [creating, setCreating]   = useState(false);
@@ -131,7 +132,13 @@ export default function LobbyPage({ user, onCreateGame, onJoinGame, onSignOut }:
           Battle Line
         </span>
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          <span style={{ color: "var(--text-dim)", fontSize: "0.9rem" }}>
+          <button
+            onClick={onViewProfile}
+            style={{
+              background: "transparent", border: "none", padding: 0,
+              color: "var(--text-dim)", fontSize: "0.9rem", cursor: "pointer",
+            }}
+          >
             {user.displayName}
             {timeControl !== "unlimited" && (() => {
               const cr = user.ratings[timeControl];
@@ -141,7 +148,7 @@ export default function LobbyPage({ user, onCreateGame, onJoinGame, onSignOut }:
                 </span>
               ) : null;
             })()}
-          </span>
+          </button>
           <button
             onClick={onSignOut}
             style={{

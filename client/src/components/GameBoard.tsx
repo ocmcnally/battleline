@@ -27,8 +27,8 @@ function RatingRow({ label, rc }: { label: string; rc: RatingChange | null | und
   if (!rc) return null;
   const diff = rc.after - rc.before;
   const sign = diff >= 0 ? "+" : "";
-  const before = rc.provisional_before ? `${rc.before}??` : `${rc.before}`;
-  const after  = rc.provisional_after  ? `${rc.after}??`  : `${rc.after}`;
+  const before = rc.provisional_before ? `${rc.before}?` : `${rc.before}`;
+  const after  = rc.provisional_after  ? `${rc.after}?`  : `${rc.after}`;
   const color  = diff >= 0 ? "#6ab04c" : "var(--claimed-opp)";
   return (
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",

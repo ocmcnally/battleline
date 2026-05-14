@@ -77,6 +77,16 @@ export async function getOrCreateProfile(session: Session): Promise<Profile | nu
   return created;
 }
 
+export async function fetchProfile(userId: string): Promise<Profile | null> {
+  const { data, error } = await supabase
+    .from("profiles")
+    .select(PROFILE_COLS)
+    .eq("id", userId)
+    .single();
+  if (error) { console.error("[profile] fetch error:", error); return null; }
+  return data;
+}
+
 export async function updateUsername(userId: string, displayName: string): Promise<string | null> {
   const { error } = await supabase
     .from("profiles")
