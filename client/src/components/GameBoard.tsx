@@ -341,9 +341,25 @@ export default function GameBoard({ state, onMove, error, onLeave }: Props) {
 
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          <span style={{ fontWeight: 700, color: turnColor }}>{turnLabel}</span>
-          {state.clock && <Clock clock={state.clock} myTurn={my_turn} />}
-        </div>
+            <span style={{ fontWeight: 700, color: turnColor }}>{turnLabel}</span>
+            {state.clock && <Clock clock={state.clock} myTurn={my_turn} />}
+          </div>
+          {winner === null && (
+            <button
+              onClick={() => {
+                if (window.confirm("Resign this game?")) {
+                  onMove({ action: "resign" });
+                }
+              }}
+              style={{
+                borderRadius: 6, fontWeight: 600, padding: "5px 12px", fontSize: "0.8rem",
+                background: "transparent", color: "var(--text-dim)",
+                border: "1px solid var(--surface2)", cursor: "pointer",
+              }}
+            >
+              Resign
+            </button>
+          )}
         </div>
 
         <div style={{ fontSize: "0.8rem", color: "var(--text-dim)", textAlign: "right" }}>

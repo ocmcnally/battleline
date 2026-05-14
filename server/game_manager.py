@@ -150,6 +150,10 @@ class GameManager:
         if game.winner is not None:
             return "Game is already over.", False
 
+        if move.get("action") == "resign":
+            game.winner = 1 - player_idx
+            return f"{game.names[player_idx]} resigned.", True
+
         is_scout_return = move.get("action") == "scout_return"
         is_scout_reveal = move.get("action") == "scout_reveal"
         turn_completing  = not is_scout_reveal

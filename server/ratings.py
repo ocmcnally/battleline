@@ -1,6 +1,9 @@
 """Supabase rating read/write via REST API."""
 import os
+import logging
 import httpx
+
+log = logging.getLogger(__name__)
 
 PROVISIONAL_THRESHOLD = 10
 
@@ -26,6 +29,7 @@ async def _fetch(user_id: str, client: httpx.AsyncClient) -> dict | None:
            f"?id=eq.{user_id}"
            f"&select=id,rating,rd,volatility,games_played")
     r = await client.get(url, headers=_headers())
+    log.info("[ratings] fetch %s → %d %s", user_id[:8], r.status_code, r.text[:200])
     if r.status_code != 200:
         return None
     rows = r.json()
@@ -38,32 +42,41 @@ async def settle_game(winner_id: str, loser_id: str) -> dict | None:
     Returns {token: {before, after, provisional_before, provisional_after}} or None on failure.
     """
     if not _url() or not _svc_key():
+        log.warning("[ratings] SUPABASE_URL or SUPABASE_SERVICE_KEY not set — skipping")
         return None
 
     from .glicko2 import update
 
-    async with httpx.AsyncClient() as client:
-        w = await _fetch(winner_id, client)
-        l = await _fetch(loser_id,  client)
-        if not w or not l:
-            return None
+    try:
+        async with httpx.AsyncClient() as client:
+            w = await _fetch(winner_id, client)
+            l = await _fetch(loser_id,  client)
+            if not w or not l:
+                log.warning("[ratings] could not fetch profiles (w=%s l=%s)", w, l)
+                return None
 
-        wr, wrd, wsig = update(w["rating"], w["rd"], w["volatility"], l["rating"], l["rd"], 1.0)
-        lr, lrd, lsig = update(l["rating"], l["rd"], l["volatility"], w["rating"], w["rd"], 0.0)
+            wr, wrd, wsig = update(w["rating"], w["rd"], w["volatility"], l["rating"], l["rd"], 1.0)
+            lr, lrd, lsig = update(l["rating"], l["rd"], l["volatility"], w["rating"], w["rd"], 0.0)
 
-        base = f"{_url()}/rest/v1/profiles"
-        await client.patch(
-            base + f"?id=eq.{winner_id}",
-            json={"rating": round(wr, 1), "rd": round(wrd, 1), "volatility": wsig,
-                  "games_played": w["games_played"] + 1},
-            headers=_headers(),
-        )
-        await client.patch(
-            base + f"?id=eq.{loser_id}",
-            json={"rating": round(lr, 1), "rd": round(lrd, 1), "volatility": lsig,
-                  "games_played": l["games_played"] + 1},
-            headers=_headers(),
-        )
+            base = f"{_url()}/rest/v1/profiles"
+            rw = await client.patch(
+                base + f"?id=eq.{winner_id}",
+                json={"rating": round(wr, 1), "rd": round(wrd, 1), "volatility": wsig,
+                      "games_played": w["games_played"] + 1},
+                headers=_headers(),
+            )
+            rl = await client.patch(
+                base + f"?id=eq.{loser_id}",
+                json={"rating": round(lr, 1), "rd": round(lrd, 1), "volatility": lsig,
+                      "games_played": l["games_played"] + 1},
+                headers=_headers(),
+            )
+            log.info("[ratings] patch winner→%d loser→%d", rw.status_code, rl.status_code)
+            if rw.status_code not in (200, 204) or rl.status_code not in (200, 204):
+                log.warning("[ratings] patch failed: %s / %s", rw.text[:200], rl.text[:200])
+    except Exception as e:
+        log.exception("[ratings] unexpected error: %s", e)
+        return None
 
     return {
         winner_id: {
