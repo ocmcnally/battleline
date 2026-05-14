@@ -51,8 +51,9 @@ def game_view(game: BattleLineGame, pov: int) -> dict:
         "discarded": [serialize_card(c) for c in game.discarded],
         "my_turn": game.turn % 2 == pov,
         "winner": winner,
-        "my_tactics_played": game.tactics_played[pov],
+        "my_tactics_played":  game.tactics_played[pov],
         "opp_tactics_played": game.tactics_played[opp],
+        "opp_tactics_in_hand": sum(1 for c in game.hands[opp] if isinstance(c, TacticsCard)),
         "leaders_in_play": list(game.leaders_in_play[pov]),
         "names": {"me": game.names[pov], "opp": game.names[opp]},
     }

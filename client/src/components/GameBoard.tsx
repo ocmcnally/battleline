@@ -303,7 +303,8 @@ export default function GameBoard({ state, onMove, error, onLeave }: Props) {
   // ── Render ─────────────────────────────────────────────────────────────────
 
   const { names, my_totem_count, opp_totem_count, troop_deck_size, tactics_deck_size,
-          my_turn, winner, my_tactics_played, opp_tactics_played } = state;
+          my_turn, winner, my_tactics_played, opp_tactics_played, opp_tactics_in_hand } = state;
+  const my_tactics_in_hand = state.my_hand.filter(c => c.type === "tactics").length;
 
   const turnLabel =
     winner === "me"  ? "You won!"        :
@@ -362,12 +363,24 @@ export default function GameBoard({ state, onMove, error, onLeave }: Props) {
           )}
         </div>
 
-        <div style={{ fontSize: "0.8rem", color: "var(--text-dim)", textAlign: "right" }}>
-          Tactics: me {my_tactics_played} / opp {opp_tactics_played}
+        <div style={{ fontSize: "0.75rem", color: "var(--text-dim)", textAlign: "right", lineHeight: 1.6 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "auto 2rem 2rem", columnGap: 6, alignItems: "center" }}>
+            <span style={{ color: "var(--text-dim)", opacity: 0.6 }}></span>
+            <span style={{ fontWeight: 700, color: "var(--claimed-me)", textAlign: "center" }}>Me</span>
+            <span style={{ fontWeight: 700, color: "var(--claimed-opp)", textAlign: "center" }}>Opp</span>
+
+            <span>Played</span>
+            <span style={{ textAlign: "center" }}>{my_tactics_played}</span>
+            <span style={{ textAlign: "center" }}>{opp_tactics_played}</span>
+
+            <span>In hand</span>
+            <span style={{ textAlign: "center" }}>{my_tactics_in_hand}</span>
+            <span style={{ textAlign: "center" }}>{opp_tactics_in_hand}</span>
+          </div>
           {tacticsBlocked && (
-            <span style={{ color: "var(--claimed-opp)", marginLeft: 8, fontWeight: 700 }}>
-              (tactics locked)
-            </span>
+            <div style={{ color: "var(--claimed-opp)", fontWeight: 700, marginTop: 2 }}>
+              tactics locked
+            </div>
           )}
         </div>
       </div>

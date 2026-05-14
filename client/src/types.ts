@@ -34,8 +34,9 @@ export interface GameState {
   discarded:         CardData[];
   my_turn:           boolean;
   winner:            "me" | "opp" | null;
-  my_tactics_played:  number;
-  opp_tactics_played: number;
+  my_tactics_played:   number;
+  opp_tactics_played:  number;
+  opp_tactics_in_hand: number;
   leaders_in_play:   string[];
   names:             { me: string; opp: string };
   clock:             ClockState | null;
