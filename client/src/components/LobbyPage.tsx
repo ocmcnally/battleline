@@ -2,11 +2,12 @@ import { useState, useEffect, useCallback } from "react";
 import type { User, OpenGame } from "../types";
 
 interface Props {
-  user:           User;
-  onCreateGame:   (gameId: string) => void;
-  onJoinGame:     (gameId: string) => void;
-  onSignOut:      () => void;
-  onViewProfile:  () => void;
+  user:               User;
+  onCreateGame:       (gameId: string) => void;
+  onJoinGame:         (gameId: string) => void;
+  onSignOut:          () => void;
+  onViewProfile:      () => void;
+  onViewLeaderboard:  () => void;
 }
 
 function timeAgo(ts: number): string {
@@ -36,7 +37,7 @@ function formatRating(rating: number | null, provisional: boolean | null): strin
   return provisional ? `${Math.round(rating)}?` : `${Math.round(rating)}`;
 }
 
-export default function LobbyPage({ user, onCreateGame, onJoinGame, onSignOut, onViewProfile }: Props) {
+export default function LobbyPage({ user, onCreateGame, onJoinGame, onSignOut, onViewProfile, onViewLeaderboard }: Props) {
   const [openGames, setOpenGames] = useState<OpenGame[]>([]);
   const [codeInput, setCodeInput] = useState("");
   const [creating, setCreating]   = useState(false);
@@ -132,6 +133,15 @@ export default function LobbyPage({ user, onCreateGame, onJoinGame, onSignOut, o
           Battle Line
         </span>
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <button
+            onClick={onViewLeaderboard}
+            style={{
+              background: "transparent", border: "none", padding: 0,
+              color: "var(--text-dim)", fontSize: "0.85rem", cursor: "pointer",
+            }}
+          >
+            Leaderboard
+          </button>
           <button
             onClick={onViewProfile}
             style={{

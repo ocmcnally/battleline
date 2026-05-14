@@ -87,6 +87,41 @@ export async function fetchProfile(userId: string): Promise<Profile | null> {
   return data;
 }
 
+export interface LeaderboardEntry {
+  display_name: string;
+  rating:       number;
+  games_played: number;
+  provisional:  boolean;
+}
+
+export async function fetchLeaderboard(category: RatingCategory): Promise<LeaderboardEntry[]> {
+  const rCol = `${category}_rating` as keyof Profile;
+  const gCol = `${category}_games_played` as keyof Profile;
+  const { data, error } = await supabase
+    .from("profiles")
+    .select(`display_name, ${rCol}, ${gCol}`)
+    .gt(gCol, 0)
+    .order(rCol, { ascending: false })
+    .limit(100);
+
+  if (error || !data) return [];
+
+  const entries: LeaderboardEntry[] = (data as Record<string, unknown>[]).map(row => {
+    const gp = (row[gCol] as number) ?? 0;
+    return {
+      display_name: row.display_name as string,
+      rating:       Math.round(row[rCol] as number),
+      games_played: gp,
+      provisional:  gp < PROVISIONAL_THRESHOLD,
+    };
+  });
+
+  // Non-provisional first (by rating desc), provisional below (by rating desc)
+  const established = entries.filter(e => !e.provisional);
+  const provisional = entries.filter(e =>  e.provisional);
+  return [...established, ...provisional];
+}
+
 export async function updateUsername(userId: string, displayName: string): Promise<string | null> {
   const { error } = await supabase
     .from("profiles")

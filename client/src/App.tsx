@@ -5,6 +5,7 @@ import { useGameSocket } from "./hooks/useGameSocket";
 import LandingPage from "./components/LandingPage";
 import LobbyPage from "./components/LobbyPage";
 import ProfilePage from "./components/ProfilePage";
+import LeaderboardPage from "./components/LeaderboardPage";
 import WaitingRoom from "./components/WaitingRoom";
 import GameBoard from "./components/GameBoard";
 import UsernameSetup from "./components/UsernameSetup";
@@ -17,6 +18,7 @@ type Phase =
   | { screen: "username_setup"; user: User }
   | { screen: "lobby";          user: User }
   | { screen: "profile";        user: User }
+  | { screen: "leaderboard";    user: User }
   | { screen: "waiting";        user: User; gameId: string }
   | { screen: "game";           user: User; gameId: string };
 
@@ -121,6 +123,11 @@ export default function App() {
     setPhase({ screen: "profile", user: phase.user });
   }
 
+  function handleViewLeaderboard() {
+    if (phase.screen !== "lobby") return;
+    setPhase({ screen: "leaderboard", user: phase.user });
+  }
+
   // ── Render ───────────────────────────────────────────────────────────────────
 
   switch (phase.screen) {
@@ -155,6 +162,7 @@ export default function App() {
           onJoinGame={handleJoinGame}
           onSignOut={handleSignOut}
           onViewProfile={handleViewProfile}
+          onViewLeaderboard={handleViewLeaderboard}
         />
       );
 
@@ -162,6 +170,13 @@ export default function App() {
       return (
         <ProfilePage
           user={phase.user}
+          onBack={() => setPhase({ screen: "lobby", user: phase.user })}
+        />
+      );
+
+    case "leaderboard":
+      return (
+        <LeaderboardPage
           onBack={() => setPhase({ screen: "lobby", user: phase.user })}
         />
       );
