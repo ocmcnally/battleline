@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { playCardSound } from "../lib/sound";
 import type { GameState, CardData, TacticsCard, RatingChange } from "../types";
 import Board from "./Board";
 import Hand from "./Hand";
@@ -59,6 +60,15 @@ export default function GameBoard({ state, onMove, error, onLeave }: Props) {
   const [draggedCard, setDraggedCard] = useState<CardData | null>(null);
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const preScoutHand = useRef<CardData[]>([]);
+  const prevMyTurn = useRef(state.my_turn);
+
+  // Play sound when opponent finishes their turn
+  useEffect(() => {
+    if (!prevMyTurn.current && state.my_turn && state.winner === null) {
+      playCardSound();
+    }
+    prevMyTurn.current = state.my_turn;
+  }, [state.my_turn, state.winner]);
 
   const selectedCard: CardData | null =
     selectedIdx !== null ? state.my_hand[selectedIdx] : null;
@@ -121,6 +131,7 @@ export default function GameBoard({ state, onMove, error, onLeave }: Props) {
 
     setSelectedIdx(null);
     setDraggedCard(null);
+    playCardSound();
 
     if (!needsDraw) { onMove(move); setPhase({ kind: "idle" }); return; }
 
@@ -318,7 +329,30 @@ export default function GameBoard({ state, onMove, error, onLeave }: Props) {
     my_turn          ? "var(--claimed-me)"  :
     "var(--text-dim)";
 
-  const tacticsBlocked = my_turn && !canPlayTacticsCard() && winner === null;
+  const tacticsBlocked = !canPlayTacticsCard() && winner === null;
+
+  // In draw phase, optimistically show the played card on the totem and remove it from hand
+  const displayTotems = (() => {
+    if (phase.kind !== "draw") return state.totems;
+    const m = phase.pendingMove as any;
+    if (m.action !== "play_card" || m.totem == null) return state.totems;
+    return state.totems.map((t, i) =>
+      i === m.totem ? { ...t, my_cards: [...t.my_cards, m.card as CardData] } : t
+    );
+  })();
+
+  const displayHand = (() => {
+    if (phase.kind !== "draw") return state.my_hand;
+    const m = phase.pendingMove as any;
+    if (m.action !== "play_card") return state.my_hand;
+    const played = m.card as CardData;
+    const idx = state.my_hand.findIndex(c =>
+      c.type === "troop" && played.type === "troop" &&
+      c.suit === played.suit && c.value === played.value
+    );
+    if (idx === -1) return state.my_hand;
+    return [...state.my_hand.slice(0, idx), ...state.my_hand.slice(idx + 1)];
+  })();
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: "var(--bg)" }}>
@@ -398,7 +432,7 @@ export default function GameBoard({ state, onMove, error, onLeave }: Props) {
       {/* Board */}
       <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", overflow: "auto" }}>
         <Board
-          totems={state.totems}
+          totems={displayTotems}
           troopDeckSize={troop_deck_size}
           tacticsDeckSize={tactics_deck_size}
           discarded={state.discarded}
@@ -493,7 +527,7 @@ export default function GameBoard({ state, onMove, error, onLeave }: Props) {
               )}
             </div>
             <Hand
-              cards={state.my_hand}
+              cards={displayHand}
               selectedIdx={selectedIdx}
               myTurn={my_turn && winner === null && phase.kind !== "draw"}
               onSelect={handleCardSelect}

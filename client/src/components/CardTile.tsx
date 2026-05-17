@@ -10,7 +10,7 @@ const SUIT_COLOR: Record<string, string> = {
 };
 
 const SUIT_SYMBOL: Record<string, string> = {
-  blue: "●", red: "♦", orange: "▲", yellow: "★", green: "♣", purple: "♠",
+  blue: "♦", red: "●", orange: "▲", yellow: "★", green: "♣", purple: "♠",
 };
 
 const TACTIC_COLOR: Record<string, string> = {
@@ -120,17 +120,21 @@ export default function CardTile({
       style={{
         ...base,
         background: "#f5f0e4",
-        border: selected ? "2px solid var(--claimed-me)" : highlighted ? "2px solid var(--accent)" : `1.5px solid ${tacColor}`,
+        border: selected ? "2px solid var(--claimed-me)" : highlighted ? "2px solid var(--accent)" : `2px solid ${tacColor}`,
+        justifyContent: "flex-start",
+        padding: 0,
+        overflow: "hidden",
       }}
       onClick={onClick}
       draggable={isDraggable}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
     >
+      <div style={{ width: "100%", height: 6, background: tacColor, flexShrink: 0 }} />
       <span style={{
-        color: tacColor, fontSize: "0.55rem",
+        color: tacColor, fontSize: "0.57rem",
         textAlign: "center", lineHeight: 1.3,
-        padding: "0 3px", fontWeight: 800,
+        padding: "4px 3px 0", fontWeight: 800,
         textTransform: "uppercase",
         wordBreak: "break-word",
         overflowWrap: "break-word",

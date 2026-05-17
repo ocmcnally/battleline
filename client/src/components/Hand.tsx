@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { CardData } from "../types";
 import CardTile from "./CardTile";
 
@@ -15,6 +15,10 @@ export default function Hand({
   cards, selectedIdx, myTurn, onSelect, onCardDragStart, onDragEnd,
 }: Props) {
   const [draggingIdx, setDraggingIdx] = useState<number | null>(null);
+
+  useEffect(() => {
+    setDraggingIdx(null);
+  }, [cards.length]);
 
   return (
     <div style={{
