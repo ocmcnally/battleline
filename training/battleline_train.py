@@ -11,6 +11,8 @@ import random
 import time
 from typing import List, Tuple
 
+import numpy as np
+
 try:
     import torch
     from torch import optim
@@ -37,42 +39,69 @@ from battleline_features import (
 
 # ── Move selection ─────────────────────────────────────────────────────────────
 
-def nn_choose_move(game: BattleLineGame, player: int, model, temperature: float = 1.0):
+def _sample_action(
+    logits:      "torch.Tensor",
+    moves:       list,
+    temperature: float,
+    noise_eps:   float,
+    noise_alpha: float,
+) -> int:
     """
-    Choose a troop-card move using the network's policy.
+    Given a 1-D logit tensor (POLICY_DIM,) and a list of legal (card, ti, idx)
+    moves, return the chosen action index.
 
-    temperature > 0 : sample from softmax(logits / temp)  — exploration
-    temperature = 0 : argmax  — greedy / deterministic
+    Extracted as a helper so the same sampling logic is shared between the
+    single-game path (nn_choose_move) and the batched generation path
+    (generate_selfplay_dataset), avoiding code duplication.
     """
-    moves = legal_troop_moves(game, player)
-    if not moves:
-        return None
-
-    with torch.no_grad():
-        logits, _ = model(to_tensor(game, player))
-        logits = logits.squeeze(0)
-
     legal_mask_t = torch.zeros(POLICY_DIM, dtype=torch.bool)
     for _, _, idx in moves:
         legal_mask_t[idx] = True
     logits = logits.masked_fill(~legal_mask_t, float("-inf"))
 
     if temperature < 1e-6:
-        action_idx = int(logits.argmax())
-    else:
-        probs      = torch.softmax(logits / temperature, dim=0)
-        action_idx = int(torch.multinomial(probs, 1))
+        return int(logits.argmax())
 
+    probs       = torch.softmax(logits / temperature, dim=0).numpy()
+    legal_probs = probs[[idx for _, _, idx in moves]]
+    legal_probs = np.clip(legal_probs, 0, None)
+
+    if noise_eps > 0 and len(moves) > 1:
+        noise       = np.random.dirichlet([noise_alpha] * len(moves))
+        legal_probs = (1 - noise_eps) * legal_probs + noise_eps * noise
+
+    legal_probs /= legal_probs.sum()
+    return moves[np.random.choice(len(moves), p=legal_probs)][2]
+
+
+def nn_choose_move(
+    game:        BattleLineGame,
+    player:      int,
+    model,
+    temperature: float = 1.0,
+    noise_eps:   float = 0.0,
+    noise_alpha: float = 0.3,
+):
+    """
+    Single-game move selection — used by evaluate_models and sample_game.
+    For bulk game generation use generate_selfplay_dataset which batches
+    all active games into one forward pass per round.
+    """
+    moves = legal_troop_moves(game, player)
+    if not moves:
+        return None
+    with torch.no_grad():
+        logits, _ = model(to_tensor(game, player))
+    action_idx = _sample_action(logits.squeeze(0), moves, temperature, noise_eps, noise_alpha)
     for card, ti, idx in moves:
         if idx == action_idx:
             return card, ti, idx
-
-    return moves[0]  # fallback — should never be reached
+    return moves[0]
 
 
 # ── Self-play data generation ──────────────────────────────────────────────────
 
-def generate_selfplay_dataset(n_games: int, model, temperature: float = 1.0) -> List[Tuple]:
+def generate_selfplay_dataset(n_games: int, model, temperature: float = 1.0, noise_eps: float = 0.25) -> List[Tuple]:
     """
     Play n_games of the current model against itself and return training examples.
 
@@ -88,7 +117,7 @@ def generate_selfplay_dataset(n_games: int, model, temperature: float = 1.0) -> 
 
         while game.winner is None:
             player = game.turn % 2
-            move   = nn_choose_move(game, player, model, temperature)
+            move   = nn_choose_move(game, player, model, temperature, noise_eps)
             if move is None:
                 break
 
@@ -286,14 +315,17 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Battle Line self-play training loop.")
     parser.add_argument("--iterations",        type=int,   default=20,   help="Number of self-play/train iterations.")
     parser.add_argument("--games",             type=int,   default=200,  help="Self-play games per iteration.")
-    parser.add_argument("--epochs",            type=int,   default=10,   help="Training epochs per iteration.")
+    parser.add_argument("--epochs",            type=int,   default=5,    help="Training epochs per iteration. Lower than before because the replay buffer already provides diversity — more epochs just overfits the current batch.")
     parser.add_argument("--batch-size",        type=int,   default=64)
     parser.add_argument("--lr",                type=float, default=1e-3)
     parser.add_argument("--value-weight",      type=float, default=1.0)
     parser.add_argument("--temperature",       type=float, default=1.0,  help="Move sampling temperature during self-play.")
+    parser.add_argument("--noise-eps",         type=float, default=0.25, help="Dirichlet noise fraction mixed into policy during self-play (0 = off).")
+    parser.add_argument("--noise-alpha",       type=float, default=0.3,  help="Dirichlet alpha — lower = more extreme noise.")
+    parser.add_argument("--buffer-iters",      type=int,   default=10,   help="Keep examples from this many past iterations in the replay buffer.")
     parser.add_argument("--eval-games",        type=int,   default=50,   help="Games to evaluate new vs old model.")
     parser.add_argument("--promote-threshold", type=float, default=0.52, help="Win rate required to promote candidate.")
-    parser.add_argument("--step-weight",   type=float, default=0.35, help="Weight of per-move formation/claim bonus in value target.")
+    parser.add_argument("--step-weight",       type=float, default=0.35, help="Weight of per-move formation/claim bonus in value target.")
     parser.add_argument("--hidden-dim",        type=int,   default=512)
     parser.add_argument("--n-blocks",          type=int,   default=6)
     parser.add_argument("--checkpoint-dir",    type=str,   default=os.path.join(os.path.dirname(__file__), "checkpoints"))
@@ -303,9 +335,12 @@ def main() -> int:
 
     os.makedirs(args.checkpoint_dir, exist_ok=True)
 
-    # Load or initialise model
+    # Load or initialise model.
+    # Track whether we started truly fresh so we know whether iteration 1
+    # has a valid baseline to evaluate against.
     model = BattleLineNet(hidden_dim=args.hidden_dim, n_blocks=args.n_blocks)
-    if not args.fresh and os.path.exists(_MODEL_PATH):
+    started_fresh = args.fresh or not os.path.exists(_MODEL_PATH)
+    if not started_fresh:
         model.load_state_dict(torch.load(_MODEL_PATH, weights_only=True))
         print(f"Loaded existing model from {_MODEL_PATH}")
     else:
@@ -314,21 +349,52 @@ def main() -> int:
 
     win_history: List[float] = []
 
+    # Replay buffer: stores example batches from recent iterations.
+    # Training on a mix of old and new data prevents the model from
+    # memorising a single batch (which caused value loss → 0.02 quickly
+    # without any real improvement in play quality — the echo chamber problem).
+    # We keep the last `buffer_iters` iterations rather than a fixed example
+    # count so the buffer naturally scales with --games.
+    replay_buffer: List[List] = []
+
     for iteration in range(1, args.iterations + 1):
         iter_start = time.time()
         print(f"{'='*54}")
         print(f"Iteration {iteration}/{args.iterations}")
         print(f"{'='*54}")
 
-        # 1. Generate self-play games with current model
-        print(f"Generating {args.games} games (temperature={args.temperature})...")
-        examples = generate_selfplay_dataset(args.games, model, args.temperature)
-        random.shuffle(examples)
-        print(f"Generated {len(examples)} training examples.")
+        # 1. Generate self-play games with current model.
+        # Dirichlet noise (noise_eps) is mixed into the policy at every move
+        # so the model is forced to occasionally try moves it would normally
+        # underweight.  This prevents the games from all looking identical and
+        # gives the replay buffer genuine diversity across iterations.
+        # noise_eps=0 during evaluation and sample_game so those stay greedy.
+        print(f"Generating {args.games} games "
+              f"(temp={args.temperature}, noise={args.noise_eps})...")
+        new_examples = generate_selfplay_dataset(
+            args.games, model, args.temperature, args.noise_eps
+        )
+        print(f"Generated {len(new_examples)} new examples.")
 
-        # 2. Train a candidate starting from the current model's weights
+        # 2. Update replay buffer.
+        # Pop the oldest iteration batch when the buffer is full so we never
+        # train on data from more than `buffer_iters` iterations ago.
+        replay_buffer.append(new_examples)
+        if len(replay_buffer) > args.buffer_iters:
+            replay_buffer.pop(0)
+
+        # Flatten and shuffle all buffered examples for training.
+        all_examples = [ex for batch in replay_buffer for ex in batch]
+        random.shuffle(all_examples)
+        print(f"Replay buffer: {len(all_examples)} examples "
+              f"({len(replay_buffer)}/{args.buffer_iters} iterations).")
+
+        # 3. Train a candidate starting from the current model's weights.
+        # Training on the full buffer (not just new examples) means each
+        # gradient step sees a diverse mix of positions from different model
+        # versions, reducing overfitting to the current play style.
         candidate = copy.deepcopy(model)
-        tensors   = build_training_tensors(examples, args.device)
+        tensors   = build_training_tensors(all_examples, args.device)
         dataset   = TensorDataset(*tensors)
         print("Training candidate...")
         train_model(
@@ -340,18 +406,22 @@ def main() -> int:
             device=args.device,
         )
 
-        # 3. Evaluate candidate vs current model (skip promotion check on iter 1 — always promote)
-        if iteration == 1:
+        # 4. Evaluate candidate vs current model.
+        # Skip evaluation only on iteration 1 of a truly fresh run — in that
+        # case there is no meaningful baseline to compare against.
+        # When continuing from a saved model, evaluate every iteration so the
+        # existing model is always the bar to beat.
+        if iteration == 1 and started_fresh:
             win_rate = 1.0
-            print("Iteration 1: promoting without evaluation.")
+            print("Iteration 1 (fresh start): promoting without evaluation.")
         else:
-            print(f"Evaluating candidate vs current model ({args.eval_games} games)...")
+            print(f"Evaluating ({args.eval_games} games)...")
             win_rate = evaluate_models(candidate, model, args.eval_games)
             win_history.append(win_rate)
             print(f"Candidate win rate: {win_rate:.1%}  "
                   f"(threshold {args.promote_threshold:.1%})")
 
-        # 4. Promote or discard
+        # 5. Promote or discard.
         if win_rate >= args.promote_threshold:
             model = candidate
             torch.save(model.state_dict(), _MODEL_PATH)

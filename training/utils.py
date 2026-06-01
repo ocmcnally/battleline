@@ -10,13 +10,20 @@ from battleline_features import _formation_cards, _best_consistent_type
 # ── Formation helpers ──────────────────────────────────────────────────────────
 
 def _form_score(cards: list) -> float:
-    """Map a list of formation cards to a [0, 1] quality score.
-    HighSum=0.0  Straight=0.25  Flush=0.5  3-of-a-kind=0.75  StraightFlush=1.0
+    """
+    Map a list of formation cards to a [0, 1] quality score.
+
+    Non-linear scale that creates a large reward gap at 3-of-a-kind and
+    straight flush specifically — the formations the model was failing to
+    pursue with the original linear scale (equal 0.25 gaps between all tiers).
+
+    Linear (old):  HighSum=0.00  Straight=0.25  Flush=0.50  3OAK=0.75  SF=1.00
+    Non-linear:    HighSum=0.00  Straight=0.05  Flush=0.15  3OAK=0.65  SF=1.00
     """
     if not cards:
         return 0.0
-    t = _best_consistent_type(cards)  # 1–5
-    return (t - 1) / 4.0
+    t = _best_consistent_type(cards)
+    return {1: 0.0, 2: 0.05, 3: 0.15, 4: 0.65, 5: 1.0}.get(t, 0.0)
 
 
 def avg_formation_quality(game, player: int) -> float:
