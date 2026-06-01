@@ -23,7 +23,7 @@ def _form_score(cards: list) -> float:
     if not cards:
         return 0.0
     t = _best_consistent_type(cards)
-    return {1: 0.0, 2: 0.05, 3: 0.15, 4: 0.65, 5: 1.0}.get(t, 0.0)
+    return {1: 0.0, 2: 0.10, 3: 0.30, 4: 0.65, 5: 1.0}.get(t, 0.0)
 
 
 def avg_formation_quality(game, player: int) -> float:
@@ -42,17 +42,22 @@ def avg_formation_quality(game, player: int) -> float:
     return sum(scores) / len(scores) if scores else 0.0
 
 
+# Separate score table for claim bonuses — identical to _form_score except SF
+# gets a small extra bump (1.2 vs 1.0) to push the model toward finishing
+# straight flushes rather than settling for 3OAK or flush.
+_CLAIM_SCORES = {1: 0.0, 2: 0.10, 3: 0.30, 4: 0.65, 5: 1.2}
+
 def claim_formation_bonus(game, player: int, newly_claimed: set) -> float:
     """
     Reward for flags claimed on this move, weighted by the formation type
-    used to claim each one.  A straight-flush claim scores 1.0; a high-sum
-    claim scores 0.0.  Encourages finishing strong formations, not just any
-    formation.
+    used to claim each one.  Uses _CLAIM_SCORES which gives SF a slight extra
+    bonus (1.2) over the ongoing quality score (1.0).
     """
     bonus = 0.0
     for i in newly_claimed:
         fc = _formation_cards(game.totems[i].sides[player])
-        bonus += _form_score(fc)
+        t  = _best_consistent_type(fc)
+        bonus += _CLAIM_SCORES.get(t, 0.0)
     return bonus
 
 

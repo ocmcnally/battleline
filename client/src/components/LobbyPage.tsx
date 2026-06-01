@@ -9,6 +9,7 @@ interface Props {
   onViewProfile:      () => void;
   onViewLeaderboard:  () => void;
   onViewReplay:       () => void;
+  onPlayVsAI:         () => void;
 }
 
 function timeAgo(ts: number): string {
@@ -38,7 +39,7 @@ function formatRating(rating: number | null, provisional: boolean | null): strin
   return provisional ? `${Math.round(rating)}?` : `${Math.round(rating)}`;
 }
 
-export default function LobbyPage({ user, onCreateGame, onJoinGame, onSignOut, onViewProfile, onViewLeaderboard, onViewReplay }: Props) {
+export default function LobbyPage({ user, onCreateGame, onJoinGame, onSignOut, onViewProfile, onViewLeaderboard, onViewReplay, onPlayVsAI }: Props) {
   const [openGames, setOpenGames] = useState<OpenGame[]>([]);
   const [codeInput, setCodeInput] = useState("");
   const [creating, setCreating]   = useState(false);
@@ -134,6 +135,15 @@ export default function LobbyPage({ user, onCreateGame, onJoinGame, onSignOut, o
           Battle Line
         </span>
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <button
+            onClick={onPlayVsAI}
+            style={{
+              background: "transparent", border: "none", padding: 0,
+              color: "var(--text-dim)", fontSize: "0.85rem", cursor: "pointer",
+            }}
+          >
+            Play vs AI
+          </button>
           <button
             onClick={onViewReplay}
             style={{

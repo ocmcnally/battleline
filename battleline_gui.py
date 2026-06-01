@@ -158,6 +158,11 @@ class BattleLineGUI:
         p0   = self._name_var.get().strip() or "Player 1"
         p1   = "AI" if mode == 2 else "Player 2"
         self.game        = BattleLineGame([p0, p1])
+        # Capture initial state immediately after creation so we can save it
+        # later for accurate replay. After __init__ the deck is already dealt,
+        # so we snapshot hands and remaining deck right here.
+        self._initial_hands = [list(self.game.hands[0]), list(self.game.hands[1])]
+        self._initial_deck  = list(self.game.deck)
         self.is_ai       = [False, mode == 2]
         self.pov         = 0
         self.sel         = None
@@ -169,7 +174,7 @@ class BattleLineGUI:
         if mode == 2 and torch is not None:
             try:
                 self.nn_model = BattleLineNet()
-                self.nn_model.load_state_dict(torch.load("battleline_model.pt", weights_only=True))
+                self.nn_model.load_state_dict(torch.load("training/battleline_model.pt", weights_only=True))
                 self.nn_model.eval()
                 self.msg = f"{p0}'s turn — select a card. Playing against Neural Network AI."
             except Exception as e:
@@ -1024,7 +1029,9 @@ class BattleLineGUI:
         # Save game if it was against AI
         if self.is_ai[1]:
             try:
-                filepath = save_game(g, self.move_history, g.winner)
+                filepath = save_game(g, self.move_history, g.winner,
+                                    initial_hands=self._initial_hands,
+                                    initial_deck=self._initial_deck)
                 print(f"Game saved to {filepath}")
             except Exception as e:
                 print(f"Failed to save game: {e}")

@@ -39,10 +39,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .game_manager import GameManager
+from .game_manager import GameManager, is_ai_token, ai_token_for
 from .ws_manager import ConnectionManager
 from .serializer import game_view
 from .ratings import settle_game, get_display_rating
+from . import bot
 
 app = FastAPI(title="Battle Line")
 
@@ -55,6 +56,7 @@ app.add_middleware(
 
 gm = GameManager()
 cm = ConnectionManager()
+bot.load_model()  # Load at startup so first AI move isn't delayed
 
 
 # ── Pydantic request bodies ───────────────────────────────────────────────────
@@ -66,6 +68,11 @@ class GameRequest(BaseModel):
     increment_ms: int         = 0
     rated:        bool        = True
     category:     str | None  = None
+
+
+class VsAIRequest(BaseModel):
+    token:    str
+    username: str
 
 
 # ── HTTP ──────────────────────────────────────────────────────────────────────
@@ -108,6 +115,35 @@ async def clock_watcher(game_id: str):
             break
 
         await asyncio.sleep(min(remaining / 1000.0, 1.0))
+
+
+async def _trigger_ai_move(session) -> None:
+    """If it's the AI's turn, pick a move and broadcast the result."""
+    ai_token = ai_token_for(session.id)
+    ai_player = session.tokens.index(ai_token)
+    if session.game.turn % 2 != ai_player or session.game.winner is not None:
+        return
+    await asyncio.sleep(0.4)   # small pause so human sees their move land first
+    move = bot.choose_move(session.game, ai_player)
+    if move is None:
+        return
+    card, ti, _ = move
+    try:
+        session.game.play_card(ai_player, card, ti)
+        session.game.draw_card(ai_player)
+        session.game.turn += 1
+    except Exception as e:
+        print(f"[AI] move error: {e}")
+        return
+    await cm.broadcast_state(session)
+    if session.game.winner is not None:
+        asyncio.create_task(_finish_game(session))
+
+
+@app.post("/games/vs-ai")
+async def create_vs_ai(req: VsAIRequest):
+    game_id = gm.create_ai_game(req.token, req.username)
+    return {"game_id": game_id, "player_idx": 0}
 
 
 @app.post("/games")
@@ -187,6 +223,8 @@ async def ws_endpoint(ws: WebSocket, token: str = Query(...)):
                         await cm.broadcast_state(r[0])
                         if r[0].game.winner is not None:
                             asyncio.create_task(_finish_game(r[0]))
+                        elif any(is_ai_token(t) for t in r[0].tokens):
+                            asyncio.create_task(_trigger_ai_move(r[0]))
                 else:
                     await ws.send_json({"type": "error", "message": msg})
 

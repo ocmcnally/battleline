@@ -51,6 +51,17 @@ class GameSession:
         }
 
 
+AI_TOKEN_PREFIX = "__AI_"
+
+
+def ai_token_for(game_id: str) -> str:
+    return f"{AI_TOKEN_PREFIX}{game_id}__"
+
+
+def is_ai_token(token: str) -> bool:
+    return token.startswith(AI_TOKEN_PREFIX)
+
+
 class GameManager:
     def __init__(self):
         self.sessions: dict[str, GameSession] = {}       # game_id → session
@@ -72,6 +83,20 @@ class GameManager:
             game_id, token, username, time_ms, increment_ms, rated, category, creator_rating,
         )
         self._token_pending[token] = game_id
+        return game_id
+
+    def create_ai_game(self, token: str, username: str) -> str:
+        """Create an instant unrated game against the neural network bot."""
+        self.cancel_pending(token)
+        game_id  = str(uuid.uuid4())[:8].upper()
+        ai_token = ai_token_for(game_id)
+        game     = BattleLineGame([username, "AI"])
+        session  = GameSession(game, [token, ai_token], game_id, rated=False)
+        self.sessions[game_id]          = session
+        self.token_to_game[token]       = game_id
+        self.token_to_game[ai_token]    = game_id
+        self.token_to_player[token]     = 0
+        self.token_to_player[ai_token]  = 1
         return game_id
 
     def join_game(self, token: str, username: str, game_id: str) -> tuple[bool, str]:

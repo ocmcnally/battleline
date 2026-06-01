@@ -135,6 +135,19 @@ export default function App() {
     setPhase({ screen: "replay", user: phase.user });
   }
 
+  async function handlePlayVsAI() {
+    if (phase.screen !== "lobby") return;
+    const user = phase.user;
+    const res = await fetch(`${import.meta.env.VITE_API_URL ?? ""}/games/vs-ai`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: user.token, username: user.displayName }),
+    });
+    if (!res.ok) return;
+    const { game_id } = await res.json();
+    setPhase({ screen: "game", user, gameId: game_id });
+  }
+
   // ── Render ───────────────────────────────────────────────────────────────────
 
   switch (phase.screen) {
@@ -171,6 +184,7 @@ export default function App() {
           onViewProfile={handleViewProfile}
           onViewLeaderboard={handleViewLeaderboard}
           onViewReplay={handleViewReplay}
+          onPlayVsAI={handlePlayVsAI}
         />
       );
 

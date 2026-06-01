@@ -4,12 +4,14 @@ Battle Line feature encoder v2.
 Each game state is encoded as a flat float vector of TOTAL_DIM values.
 
 Block layout (in order):
-  troop_hand   : 60   which troop cards are in hand
-  tactics_hand : 10   which tactics cards are in hand
-  board        : 9×2×SIDE_DIM   per-totem-side features (my side first)
-  totem_meta   : 9×6  fog / mud / claimed / cards_to_win per totem
-  unplayed     : 60   troop cards not yet placed on any totem
-  global       :  8   deck sizes, tactics counts, turn info
+  troop_hand      : 60    which troop cards are in hand
+  tactics_hand    : 10    which tactics cards are in hand
+  board           : 9×2×SIDE_DIM   per-totem-side features (my side first)
+  totem_meta      : 9×6   fog / mud / claimed / cards_to_win per totem
+  unplayed        : 60    troop cards not yet placed on any totem
+  global          :  8    deck sizes, tactics counts, turn info
+  hand_compat     : 9×6   hand-to-flag compatibility (suit/value/consec counts + completion flags)
+  achievable_board: 9×2×6 best formation actually achievable per side given unplayed cards
 
 Per-side block (SIDE_DIM = 73):
   card_presence : 60  which troop/assigned-wild cards are present
@@ -21,6 +23,8 @@ Per-side block (SIDE_DIM = 73):
   mono_value    :  1  all cards same value (3-of-a-kind seed)
   consecutive   :  1  values span exactly n-1 (straight seed)
   best_type     :  6  one-hot: [empty, sum, straight, flush, 3oak, sf]
+    (best_type = consistent with placed cards; achievable_board = actually reachable
+     given unplayed card pool — two different signals)
 """
 
 from __future__ import annotations
@@ -66,13 +70,17 @@ N_FORM_TYPES = 6
 SIDE_DIM      = TROOP_COUNT + 4 + 3 + N_FORM_TYPES   # 73
 TOTEM_META_DIM = 6
 
+HAND_COMPAT_DIM = 6   # features per totem (see encode_hand_compat)
+
 BLOCK_SIZES = {
-    "troop_hand":  TROOP_COUNT,
-    "tactics_hand": TACTICS_COUNT,
-    "board":       NUM_TOTEMS * 2 * SIDE_DIM,
-    "totem_meta":  NUM_TOTEMS * TOTEM_META_DIM,
-    "unplayed":    TROOP_COUNT,
-    "global":      8,
+    "troop_hand":       TROOP_COUNT,
+    "tactics_hand":     TACTICS_COUNT,
+    "board":            NUM_TOTEMS * 2 * SIDE_DIM,
+    "totem_meta":       NUM_TOTEMS * TOTEM_META_DIM,
+    "unplayed":         TROOP_COUNT,
+    "global":           8,
+    "hand_compat":      NUM_TOTEMS * HAND_COMPAT_DIM,
+    "achievable_board": NUM_TOTEMS * 2 * N_FORM_TYPES,
 }
 TOTAL_DIM = sum(BLOCK_SIZES.values())
 
@@ -137,6 +145,71 @@ def _best_consistent_type(cards: list) -> int:
     if mono_value:            return _F_3OAK
     if mono_suit:             return _F_FLU
     if consec:                return _F_STR
+    return _F_SUM
+
+
+def _best_achievable_type(placed: list, unplayed: list, cards_to_win: int) -> int:
+    """
+    Best formation the placed cards could actually be completed into, given the
+    pool of unplayed troop cards (deck + both hands combined — we don't distinguish
+    since we can't see the opponent's hand).
+
+    Different from _best_consistent_type, which only asks "are these cards
+    consistent with a SF/3OAK/..." without checking whether the needed
+    completing cards still exist anywhere in the game.
+
+    Example: blue-4, blue-5 placed → consistent with SF.  But if blue-3 and
+    blue-6 are already on other totems, SF is impossible.  This function would
+    return Flush instead (assuming enough blue cards remain).
+
+    Tries formation types from best to worst, returning the first one achievable.
+    """
+    n = len(placed)
+    if n == 0:
+        return _F_EMPTY
+    need = cards_to_win - n
+    if need <= 0:
+        return _best_consistent_type(placed)   # already complete
+
+    suits  = [c.suit  for c in placed]
+    values = sorted(c.value for c in placed)
+    existing = set(values)
+    mono_suit  = len(set(suits)) == 1
+    mono_value = len(set(values)) == 1 and n >= 2
+    consec     = len(existing) == n and (values[-1] - values[0]) == n - 1
+
+    # Straight flush — need mono_suit AND consecutive, plus `need` more same-suit
+    # cards within the extension window.
+    if mono_suit and (consec or n == 1):
+        s  = suits[0]
+        lo = max(1,  values[0]  - need)
+        hi = min(10, values[-1] + need)
+        avail = sum(1 for c in unplayed
+                    if c.suit == s and lo <= c.value <= hi and c.value not in existing)
+        if avail >= need:
+            return _F_SF
+
+    # 3-of-a-kind — need `need` more cards of the same value.
+    if mono_value or n == 1:
+        target = values[0]
+        avail  = sum(1 for c in unplayed if c.value == target)
+        if avail >= need:
+            return _F_3OAK
+
+    # Flush — need `need` more cards of the same suit.
+    if mono_suit:
+        avail = sum(1 for c in unplayed if c.suit == suits[0])
+        if avail >= need:
+            return _F_FLU
+
+    # Straight — need `need` more cards inside the consecutive window.
+    if consec or n == 1:
+        lo    = max(1,  values[0]  - need)
+        hi    = min(10, values[-1] + need)
+        avail = sum(1 for c in unplayed if lo <= c.value <= hi and c.value not in existing)
+        if avail >= need:
+            return _F_STR
+
     return _F_SUM
 
 
@@ -251,6 +324,104 @@ def encode_global(game: BattleLineGame, pov: int) -> List[float]:
     ]
 
 
+def encode_achievable_board(game: BattleLineGame, pov: int) -> List[float]:
+    """
+    For each totem side (own first, then opponent), a 6-dim one-hot of the
+    best formation type actually achievable given the current unplayed card pool.
+
+    Contrast with the board block's best_type one-hot, which only asks whether
+    placed cards are *consistent* with a formation — not whether the cards needed
+    to complete it are still available.  Together they let the network distinguish
+    "I'm building toward a SF" from "I'm building toward a SF that's still possible."
+
+    9 totems × 2 sides × 6 formation types = 108 features.
+    """
+    unplayed = [
+        c for c in game._unplayed_cards()
+        if isinstance(c, Card) and not isinstance(c, (WildCard, UnassignedWild))
+    ]
+    opp = 1 - pov
+    out: List[float] = []
+    for totem in game.totems:
+        ctw = totem.cards_to_win
+        for player in (pov, opp):
+            fc = _formation_cards(totem.sides[player])
+            t  = _best_achievable_type(fc, unplayed, ctw)
+            out.extend(_one_hot(t, N_FORM_TYPES))
+    return out
+
+
+def encode_hand_compat(game: BattleLineGame, pov: int) -> List[float]:
+    """
+    For each totem, how compatible is the player's current hand with completing
+    strong formations on their own side?  6 features per totem × 9 totems = 54.
+
+    Without this block the network has to learn suit/value cross-references between
+    the 60-dim hand block and the 60-dim per-side card-presence block itself — hard.
+    These features make that relationship explicit.
+
+    Per totem (own side only — opponent's side is already encoded in the board block):
+      suit_in_hand    — fraction of hand cards matching the dominant suit on my side
+      value_in_hand   — fraction of hand cards matching the dominant value on my side
+      consec_in_hand  — fraction of hand cards within the straight completion window
+      can_complete_sf    — 1.0 if hand holds enough to complete a straight flush
+      can_complete_3oak  — 1.0 if hand holds enough to complete a 3-of-a-kind
+      can_complete_flush — 1.0 if hand holds enough to complete a flush
+    """
+    hand = [
+        c for c in game.hands[pov]
+        if isinstance(c, Card) and not isinstance(c, (WildCard, UnassignedWild, TacticsCard))
+    ]
+    h = max(len(hand), 1)   # avoid division by zero
+
+    out: List[float] = []
+    for totem in game.totems:
+        if totem.claimed is not None:
+            out.extend([0.0] * HAND_COMPAT_DIM)
+            continue
+
+        fc   = _formation_cards(totem.sides[pov])
+        n    = len(fc)
+        need = totem.cards_to_win - n
+
+        if n == 0 or need <= 0:
+            out.extend([0.0] * HAND_COMPAT_DIM)
+            continue
+
+        suits  = [c.suit  for c in fc]
+        values = [c.value for c in fc]
+        dom_suit  = max(set(suits),  key=suits.count)
+        dom_value = max(set(values), key=values.count)
+
+        suit_cnt  = sum(1 for c in hand if c.suit  == dom_suit)
+        value_cnt = sum(1 for c in hand if c.value == dom_value)
+
+        # Straight window: hand cards that fall inside the gap needed to extend
+        # the current run without duplicating an already-placed value.
+        existing = set(values)
+        lo = max(1,  min(values) - need)
+        hi = min(10, max(values) + need)
+        consec_cnt = sum(1 for c in hand if lo <= c.value <= hi and c.value not in existing)
+
+        # Binary completion checks: does the hand alone supply the missing cards?
+        sf_ok    = 1.0 if sum(1 for c in hand
+                               if c.suit == dom_suit and lo <= c.value <= hi
+                               and c.value not in existing) >= need else 0.0
+        oak_ok   = 1.0 if value_cnt >= need else 0.0
+        flush_ok = 1.0 if suit_cnt  >= need else 0.0
+
+        out.extend([
+            suit_cnt   / h,
+            value_cnt  / h,
+            consec_cnt / h,
+            sf_ok,
+            oak_ok,
+            flush_ok,
+        ])
+
+    return out
+
+
 # ── Top-level encode ───────────────────────────────────────────────────────────
 
 def encode(game: BattleLineGame, pov: int) -> List[float]:
@@ -262,6 +433,8 @@ def encode(game: BattleLineGame, pov: int) -> List[float]:
         + encode_totem_meta(game, pov)
         + encode_unplayed(game)
         + encode_global(game, pov)
+        + encode_hand_compat(game, pov)
+        + encode_achievable_board(game, pov)
     )
 
 

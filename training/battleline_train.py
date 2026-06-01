@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import argparse
 import copy
+import multiprocessing as mp
 import random
 import time
 from typing import List, Tuple
@@ -24,14 +25,12 @@ except ImportError:
     TensorDataset = None
 
 from battleline import BattleLineGame
-from utils import compute_value, avg_formation_quality, claim_formation_bonus
+from game_loader import load_human_games
 from game_saver import save_game
 from server.serializer import game_view
 from battleline_features import (
     BattleLineNet,
     POLICY_DIM,
-    encode,
-    legal_mask,
     legal_troop_moves,
     to_tensor,
 )
@@ -101,54 +100,107 @@ def nn_choose_move(
 
 # ── Self-play data generation ──────────────────────────────────────────────────
 
-def generate_selfplay_dataset(n_games: int, model, temperature: float = 1.0, noise_eps: float = 0.25) -> List[Tuple]:
+def _run_games(args: tuple) -> List[Tuple]:
     """
-    Play n_games of the current model against itself and return training examples.
+    Worker for multiprocessing game generation.
 
-    Each position becomes: (features, legal_mask, action_taken, outcome)
-    outcome: +1.0 if the player whose turn it was won, -1.0 if lost, 0.0 draw.
+    Runs sequential self-play in a subprocess. Must be a top-level function
+    (not a closure) so multiprocessing can pickle it on macOS spawn context.
+
+    Why multiprocessing instead of batched inference:
+    The bottleneck is Python-level work — encode(), legal_troop_moves(),
+    game logic — not the NN forward pass. Batching the forward pass doesn't
+    help when Python logic dominates. Splitting across CPU cores does.
     """
+    state_dict, n_games, temperature, noise_eps, noise_alpha, hidden_dim, n_blocks = args
+
+    import sys, os
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    import torch
+    import numpy as np
+    from battleline import BattleLineGame
+    from battleline_features import BattleLineNet, POLICY_DIM, encode, legal_mask, legal_troop_moves, to_tensor
+    from utils import compute_value, avg_formation_quality, claim_formation_bonus
+
+    model = BattleLineNet(hidden_dim=hidden_dim, n_blocks=n_blocks)
+    model.load_state_dict(state_dict)
     model.eval()
-    examples = []
 
+    def sample(logits, moves):
+        mask_t = torch.zeros(POLICY_DIM, dtype=torch.bool)
+        for _, _, idx in moves:
+            mask_t[idx] = True
+        logits = logits.masked_fill(~mask_t, float("-inf"))
+        if temperature < 1e-6:
+            return int(logits.argmax())
+        probs = torch.softmax(logits / temperature, dim=0).numpy()
+        lp = np.clip(probs[[idx for _, _, idx in moves]], 0, None)
+        if noise_eps > 0 and len(moves) > 1:
+            lp = (1 - noise_eps) * lp + noise_eps * np.random.dirichlet([noise_alpha] * len(moves))
+        lp /= lp.sum()
+        return moves[np.random.choice(len(moves), p=lp)][2]
+
+    examples = []
     for _ in range(n_games):
-        game          = BattleLineGame(["P0", "P1"])
+        game = BattleLineGame(["P0", "P1"])
         game_examples = []
 
         while game.winner is None:
             player = game.turn % 2
-            move   = nn_choose_move(game, player, model, temperature, noise_eps)
-            if move is None:
+            moves = legal_troop_moves(game, player)
+            if not moves:
                 break
-
             features = encode(game, player)
-            mask     = legal_mask(game, player)
-            card, ti, action_index = move
-
+            mask = legal_mask(game, player)
+            with torch.no_grad():
+                logits, _ = model(to_tensor(game, player))
+            action_idx = sample(logits.squeeze(0), moves)
+            card, ti, _ = next((c, t, i) for c, t, i in moves if i == action_idx)
             claimed_before = {i for i, t in enumerate(game.totems) if t.claimed == player}
-
             game.play_card(player, card, ti)
             game.draw_card(player)
             game.turn += 1
-
             newly_claimed = {i for i, t in enumerate(game.totems)
                              if t.claimed == player and i not in claimed_before}
             step_bonus = (avg_formation_quality(game, player)
                           + claim_formation_bonus(game, player, newly_claimed))
-
-            game_examples.append((features, mask, action_index, player, step_bonus))
+            game_examples.append((features, mask, action_idx, player, step_bonus))
 
         winner = game.winner
         if winner is None:
             p0 = sum(1 for t in game.totems if t.claimed == 0)
             p1 = sum(1 for t in game.totems if t.claimed == 1)
-            winner = 0 if p0 > p1 else (1 if p1 > p0 else None)
+            winner = 0 if p0 >= p1 else 1
 
-        for features, mask, action_index, sample_player, step_bonus in game_examples:
+        for features, mask, action_idx, sample_player, step_bonus in game_examples:
             value = compute_value(winner, sample_player, game.totems, step_bonus)
-            examples.append((features, mask, action_index, value))
+            examples.append((features, mask, action_idx, value))
 
     return examples
+
+
+def generate_selfplay_dataset(
+    n_games:     int,
+    model,
+    temperature: float = 1.0,
+    noise_eps:   float = 0.25,
+    device:      str   = "cpu",
+    hidden_dim:  int   = 512,
+    n_blocks:    int   = 6,
+    noise_alpha: float = 0.3,
+) -> List[Tuple]:
+    n_workers = min(mp.cpu_count(), n_games)
+    base, rem = divmod(n_games, n_workers)
+    split = [base + (1 if i < rem else 0) for i in range(n_workers)]
+    state_dict = {k: v.cpu() for k, v in model.state_dict().items()}
+    worker_args = [
+        (state_dict, g, temperature, noise_eps, noise_alpha, hidden_dim, n_blocks)
+        for g in split
+    ]
+    ctx = mp.get_context("spawn")
+    with ctx.Pool(n_workers) as pool:
+        results = pool.map(_run_games, worker_args)
+    return [ex for batch in results for ex in batch]
 
 
 # ── Sample game saving ────────────────────────────────────────────────────────
@@ -191,7 +243,7 @@ def sample_game(model, iteration: int) -> None:
         winner = 0 if p0 > p1 else (1 if p1 > p0 else None)
 
     filename = f"selfplay_iter_{iteration:04d}.json"
-    path = save_game(game, moves, winner, filename, states={"p0": states_p0, "p1": states_p1})
+    path = save_game(game, moves, winner, filename, states={"p0": states_p0, "p1": states_p1}, human=False)
     print(f"Sample game saved → {path}  ({len(moves)} moves)")
 
 
@@ -331,6 +383,7 @@ def main() -> int:
     parser.add_argument("--checkpoint-dir",    type=str,   default=os.path.join(os.path.dirname(__file__), "checkpoints"))
     parser.add_argument("--device",            type=str,   default="cpu")
     parser.add_argument("--fresh",             action="store_true", help="Ignore existing model and start from scratch.")
+    parser.add_argument("--include-human",     action="store_true", help="Include manually-created games from saved_games/ in the replay buffer.")
     args = parser.parse_args()
 
     os.makedirs(args.checkpoint_dir, exist_ok=True)
@@ -349,13 +402,26 @@ def main() -> int:
 
     win_history: List[float] = []
 
+    # Load human games if requested.
+    # High-quality manually-created games help bootstrap the model and prevent
+    # it from getting stuck in a self-play echo chamber early on. These are
+    # treated as one "pseudo-iteration" in the replay buffer.
+    human_examples: List[Tuple] = []
+    if args.include_human:
+        print("Loading human games from saved_games/...")
+        human_examples = load_human_games()
+        print(f"Loaded {len(human_examples)} examples from human games.\n")
+
     # Replay buffer: stores example batches from recent iterations.
     # Training on a mix of old and new data prevents the model from
     # memorising a single batch (which caused value loss → 0.02 quickly
     # without any real improvement in play quality — the echo chamber problem).
     # We keep the last `buffer_iters` iterations rather than a fixed example
     # count so the buffer naturally scales with --games.
+    # Human games (if loaded) are added as the first buffer entry.
     replay_buffer: List[List] = []
+    if human_examples:
+        replay_buffer.append(human_examples)
 
     for iteration in range(1, args.iterations + 1):
         iter_start = time.time()
@@ -372,7 +438,8 @@ def main() -> int:
         print(f"Generating {args.games} games "
               f"(temp={args.temperature}, noise={args.noise_eps})...")
         new_examples = generate_selfplay_dataset(
-            args.games, model, args.temperature, args.noise_eps
+            args.games, model, args.temperature, args.noise_eps,
+            args.device, args.hidden_dim, args.n_blocks, args.noise_alpha,
         )
         print(f"Generated {len(new_examples)} new examples.")
 
