@@ -1,7 +1,9 @@
 """Game saving and loading utilities for Battle Line."""
 
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import json
-import os
 from pathlib import Path
 from typing import List, Dict, Any
 from battleline import BattleLineGame, Card, SUITS
@@ -12,38 +14,45 @@ def ensure_games_dir():
     """Create the saved_games directory if it doesn't exist."""
     Path(GAMES_DIR).mkdir(exist_ok=True)
 
-def save_game(game: BattleLineGame, moves: List[tuple], winner: int | None, filename: str = None) -> str:
+def save_game(
+    game:     BattleLineGame,
+    moves:    List[tuple],
+    winner:   int | None,
+    filename: str  | None = None,
+    states:   dict | None = None,
+) -> str:
     """
     Save a completed game to JSON.
-    
-    moves: list of (player, card_suit, card_value, totem_index) tuples
+
+    moves:  list of (player, Card, totem_index) tuples
     winner: 0, 1, or None for draw
-    returns: path to saved file
+    states: optional dict with keys "p0" and "p1", each a list of serialised
+            GameState dicts (one per move, including the initial state).
+            When present the file is self-contained for client-side replay.
     """
     ensure_games_dir()
-    
+
     if filename is None:
         import time
         filename = f"game_{int(time.time())}.json"
-    
+
     filepath = os.path.join(GAMES_DIR, filename)
-    
-    data = {
+
+    data: Dict[str, Any] = {
         "players": game.names,
-        "winner": winner,
+        "winner":  winner,
         "moves": [
-            {
-                "player": player,
-                "card": {"suit": card.suit, "value": card.value},
-                "totem_index": ti
-            }
+            {"player": player, "card": {"suit": card.suit, "value": card.value}, "totem_index": ti}
             for player, card, ti in moves
-        ]
+        ],
     }
-    
-    with open(filepath, 'w') as f:
+    if states is not None:
+        data["states_p0"] = states["p0"]
+        data["states_p1"] = states["p1"]
+
+    with open(filepath, "w") as f:
         json.dump(data, f, indent=2)
-    
+
     return filepath
 
 def load_game(filepath: str) -> tuple[BattleLineGame, List[tuple], int | None]:

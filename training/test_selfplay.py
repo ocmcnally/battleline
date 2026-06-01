@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Test self-play generation with updated claiming logic."""
 
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from battleline import BattleLineGame
-from battleline_nn import legal_troop_moves
+from battleline_features import legal_troop_moves
 from battleline import evaluate_hand, best_possible_hand
 
 def choose_expert_troop_move(game: BattleLineGame, player: int):

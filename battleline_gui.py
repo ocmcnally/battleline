@@ -12,13 +12,12 @@ from battleline import (
     NUM_TOTEMS, WIN_TOTEMS, WIN_STREAK,
     ai_make_move,
 )
-from battleline_nn import (
-    build_default_model,
-    encode_game_state,
-    features_to_tensor,
+from training.battleline_features import (
+    BattleLineNet,
     legal_troop_moves,
+    to_tensor,
 )
-from game_saver import save_game
+from training.game_saver import save_game
 
 try:
     import torch
@@ -169,8 +168,8 @@ class BattleLineGUI:
         # Load trained NN model if AI is enabled
         if mode == 2 and torch is not None:
             try:
-                self.nn_model = build_default_model()
-                self.nn_model.load_state_dict(torch.load("battleline_model.pt"))
+                self.nn_model = BattleLineNet()
+                self.nn_model.load_state_dict(torch.load("battleline_model.pt", weights_only=True))
                 self.nn_model.eval()
                 self.msg = f"{p0}'s turn — select a card. Playing against Neural Network AI."
             except Exception as e:
@@ -943,9 +942,7 @@ class BattleLineGUI:
         best_logit = float('-inf')
         
         with torch.no_grad():
-            features = encode_game_state(game, player=player)
-            tensor = features_to_tensor(features)
-            policy_logits, _ = self.nn_model(tensor)
+            policy_logits, _ = self.nn_model(to_tensor(game, player))
             logits = policy_logits.squeeze(0).cpu().numpy()
         
         # Find the highest-logit legal move

@@ -8,6 +8,7 @@ interface Props {
   onSignOut:          () => void;
   onViewProfile:      () => void;
   onViewLeaderboard:  () => void;
+  onViewReplay:       () => void;
 }
 
 function timeAgo(ts: number): string {
@@ -37,7 +38,7 @@ function formatRating(rating: number | null, provisional: boolean | null): strin
   return provisional ? `${Math.round(rating)}?` : `${Math.round(rating)}`;
 }
 
-export default function LobbyPage({ user, onCreateGame, onJoinGame, onSignOut, onViewProfile, onViewLeaderboard }: Props) {
+export default function LobbyPage({ user, onCreateGame, onJoinGame, onSignOut, onViewProfile, onViewLeaderboard, onViewReplay }: Props) {
   const [openGames, setOpenGames] = useState<OpenGame[]>([]);
   const [codeInput, setCodeInput] = useState("");
   const [creating, setCreating]   = useState(false);
@@ -133,6 +134,15 @@ export default function LobbyPage({ user, onCreateGame, onJoinGame, onSignOut, o
           Battle Line
         </span>
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <button
+            onClick={onViewReplay}
+            style={{
+              background: "transparent", border: "none", padding: 0,
+              color: "var(--text-dim)", fontSize: "0.85rem", cursor: "pointer",
+            }}
+          >
+            Replay
+          </button>
           <button
             onClick={onViewLeaderboard}
             style={{
