@@ -22,7 +22,7 @@ except ImportError:
     TensorDataset = None
 
 from battleline import BattleLineGame
-from utils import compute_value
+from utils import compute_value, avg_formation_quality, claim_formation_bonus
 from game_saver import save_game
 from server.serializer import game_view
 from battleline_features import (
@@ -72,7 +72,7 @@ def nn_choose_move(game: BattleLineGame, player: int, model, temperature: float 
 
 # ── Self-play data generation ──────────────────────────────────────────────────
 
-def generate_selfplay_dataset(n_games: int, model, temperature: float = 1.0, outcome_weight: float = 0.7) -> List[Tuple]:
+def generate_selfplay_dataset(n_games: int, model, temperature: float = 1.0) -> List[Tuple]:
     """
     Play n_games of the current model against itself and return training examples.
 
@@ -92,14 +92,22 @@ def generate_selfplay_dataset(n_games: int, model, temperature: float = 1.0, out
             if move is None:
                 break
 
-            features    = encode(game, player)
-            mask        = legal_mask(game, player)
+            features = encode(game, player)
+            mask     = legal_mask(game, player)
             card, ti, action_index = move
-            game_examples.append((features, mask, action_index, player))
+
+            claimed_before = {i for i, t in enumerate(game.totems) if t.claimed == player}
 
             game.play_card(player, card, ti)
             game.draw_card(player)
             game.turn += 1
+
+            newly_claimed = {i for i, t in enumerate(game.totems)
+                             if t.claimed == player and i not in claimed_before}
+            step_bonus = (avg_formation_quality(game, player)
+                          + claim_formation_bonus(game, player, newly_claimed))
+
+            game_examples.append((features, mask, action_index, player, step_bonus))
 
         winner = game.winner
         if winner is None:
@@ -107,8 +115,8 @@ def generate_selfplay_dataset(n_games: int, model, temperature: float = 1.0, out
             p1 = sum(1 for t in game.totems if t.claimed == 1)
             winner = 0 if p0 > p1 else (1 if p1 > p0 else None)
 
-        for features, mask, action_index, sample_player in game_examples:
-            value = compute_value(winner, sample_player, game.totems, outcome_weight)
+        for features, mask, action_index, sample_player, step_bonus in game_examples:
+            value = compute_value(winner, sample_player, game.totems, step_bonus)
             examples.append((features, mask, action_index, value))
 
     return examples
@@ -285,7 +293,7 @@ def main() -> int:
     parser.add_argument("--temperature",       type=float, default=1.0,  help="Move sampling temperature during self-play.")
     parser.add_argument("--eval-games",        type=int,   default=50,   help="Games to evaluate new vs old model.")
     parser.add_argument("--promote-threshold", type=float, default=0.52, help="Win rate required to promote candidate.")
-    parser.add_argument("--outcome-weight",    type=float, default=0.7,  help="Weight of win/loss vs totem margin in value target (1.0 = binary).")
+    parser.add_argument("--step-weight",   type=float, default=0.35, help="Weight of per-move formation/claim bonus in value target.")
     parser.add_argument("--hidden-dim",        type=int,   default=512)
     parser.add_argument("--n-blocks",          type=int,   default=6)
     parser.add_argument("--checkpoint-dir",    type=str,   default=os.path.join(os.path.dirname(__file__), "checkpoints"))
@@ -314,7 +322,7 @@ def main() -> int:
 
         # 1. Generate self-play games with current model
         print(f"Generating {args.games} games (temperature={args.temperature})...")
-        examples = generate_selfplay_dataset(args.games, model, args.temperature, args.outcome_weight)
+        examples = generate_selfplay_dataset(args.games, model, args.temperature)
         random.shuffle(examples)
         print(f"Generated {len(examples)} training examples.")
 

@@ -6,7 +6,7 @@ from typing import List, Tuple
 
 from game_saver import list_saved_games, load_game
 from battleline import BattleLineGame
-from utils import compute_value
+from utils import compute_value, avg_formation_quality, claim_formation_bonus
 from battleline_features import (
     encode,
     legal_mask,
@@ -36,12 +36,19 @@ def game_to_examples(game: BattleLineGame, moves: List[Tuple], winner: int | Non
             print(f"Warning: could not find action index for {player} {card} totem {ti}")
             continue
 
-        value = compute_value(winner, player, game.totems)
-        examples.append((features, mask, action_index, value))
+        claimed_before = {i for i, t in enumerate(replay_game.totems) if t.claimed == player}
 
         replay_game.play_card(player, card, ti)
         replay_game.draw_card(player)
         replay_game.turn += 1
+
+        newly_claimed = {i for i, t in enumerate(replay_game.totems)
+                         if t.claimed == player and i not in claimed_before}
+        step_bonus = (avg_formation_quality(replay_game, player)
+                      + claim_formation_bonus(replay_game, player, newly_claimed))
+
+        value = compute_value(winner, player, game.totems, step_bonus)
+        examples.append((features, mask, action_index, value))
 
     return examples
 
