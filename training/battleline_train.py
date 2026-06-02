@@ -349,91 +349,7 @@ def _run_games(args: tuple) -> List[Tuple]:
     tactics_played_total = 0
     tactics_drawn_total = 0
 
-    def play_move(game, player, move_info):
-        """
-        Execute a move returned from legal_all_moves.
-        move_info = (move_type, data, totem_idx, policy_idx)
-        """
-        move_type, data, totem_idx, policy_idx = move_info
-        tactic = None
-
-        if move_type == "troop":
-            card, ti = data
-            game.play_card(player, card, ti)
-            game.draw_card(player)
-
-        elif move_type == "fog":
-            tactic = next(c for c in game.hands[player]
-                         if isinstance(c, TacticsCard) and c.name == "fog")
-            game.play_environment(player, tactic, totem_idx)
-            game.draw_card(player)
-
-        elif move_type == "mud":
-            tactic = next(c for c in game.hands[player]
-                         if isinstance(c, TacticsCard) and c.name == "mud")
-            game.play_environment(player, tactic, totem_idx)
-            game.draw_card(player)
-
-        elif move_type == "alexander":
-            tactic = next(c for c in game.hands[player]
-                         if isinstance(c, TacticsCard) and c.name == "alexander")
-            game.play_unassigned_wild(player, tactic, totem_idx)
-            game.draw_card(player)
-
-        elif move_type == "darius":
-            tactic = next(c for c in game.hands[player]
-                         if isinstance(c, TacticsCard) and c.name == "darius")
-            game.play_unassigned_wild(player, tactic, totem_idx)
-            game.draw_card(player)
-
-        elif move_type == "wild8":
-            tactic = next(c for c in game.hands[player]
-                         if isinstance(c, TacticsCard) and c.name == "wild8")
-            game.play_unassigned_wild(player, tactic, totem_idx)
-            game.draw_card(player)
-
-        elif move_type == "wild321":
-            tactic = next(c for c in game.hands[player]
-                         if isinstance(c, TacticsCard) and c.name == "wild321")
-            game.play_unassigned_wild(player, tactic, totem_idx)
-            game.draw_card(player)
-
-        elif move_type == "deserter":
-            opp_ti, = data
-            tactic = next(c for c in game.hands[player]
-                         if isinstance(c, TacticsCard) and c.name == "deserter")
-            opp = 1 - player
-            opp_side = game.totems[opp_ti].sides[opp]
-            if opp_side:
-                # Auto-select lowest value card to remove
-                card_to_remove = min(opp_side, key=lambda c: c.value if hasattr(c, 'value') else 0)
-                game.play_deserter(player, tactic, opp_ti, card_to_remove)
-            game.draw_card(player)
-
-        elif move_type == "scout":
-            tactic = next(c for c in game.hands[player]
-                         if isinstance(c, TacticsCard) and c.name == "scout")
-            # Scout: draw 3 cards total (troop + tactics), keep best 2, discard worst
-            # Must draw exactly 3; fill with tactics if troops unavailable
-            troop_available = min(3, len(game.deck))
-            tactics_needed = 3 - troop_available
-            tactics_available = min(tactics_needed, len(game.tactics_deck))
-            troop_available = min(3, len(game.deck))  # Re-compute in case we need all remaining troops
-
-            if troop_available + tactics_available >= 3:
-                revealed = game.scout_reveal(player, tactic, troop_available, tactics_available)
-                drawn = [c for _, c in revealed]
-                # Keep best 2 by value (discard worst 1)
-                to_keep = sorted(drawn, key=lambda c: c.value if hasattr(c, 'value') else 0)[-2:]
-                to_discard = [c for c in drawn if c not in to_keep]
-                for c in to_discard:
-                    game.hands[player].remove(c)
-                    game.discarded.append(c)
-            else:
-                # Can't scout, not enough cards. Just discard scout and skip.
-                game.hands[player].remove(tactic)
-                game.discarded.append(tactic)
-                game.tactics_played[player] += 1
+    # Use module-level play_move (no draw_card calls — draw handled separately below)
 
     def pick_move_draw(game, player, moves):
         """
@@ -555,28 +471,26 @@ def _run_games(args: tuple) -> List[Tuple]:
             game_examples.append((play_features, play_mask, play_action_idx, player, step_bonus))
 
             # 2. Choose draw source and draw
-            draw_moves = legal_draw_moves(game, player)
-            draw_features = encode(game, player)  # Features after play but before draw
-            # Create draw mask: all draw moves are legal (always 2 options)
-            draw_mask = [0] * POLICY_DIM
-            for _, _, _, draw_action_idx in draw_moves:
-                draw_mask[draw_action_idx] = 1
+            # Scout already draws internally (reveal 3, return 2), so skip the normal draw
+            if play_type != "scout":
+                draw_moves = legal_draw_moves(game, player)
+                draw_features = encode(game, player)  # Features after play but before draw
+                draw_mask = [0] * POLICY_DIM
+                for _, _, _, draw_action_idx in draw_moves:
+                    draw_mask[draw_action_idx] = 1
 
-            # For draw, skip top-K filtering since there are only 2 options.
-            # Just evaluate both directly without candidate filtering.
-            draw_move_info = pick_move_draw(game, player, draw_moves)
-            draw_type, draw_data, draw_source, draw_action_idx = draw_move_info
+                draw_move_info = pick_move_draw(game, player, draw_moves)
+                _, _, draw_source, draw_action_idx = draw_move_info
 
-            if draw_source == "tactics":
-                game.draw_card(player, from_tactics=True)
-                tactics_drawn_total += 1
-            else:
-                game.draw_card(player, from_tactics=False)
+                if draw_source == "tactics":
+                    game.draw_card(player, from_tactics=True)
+                    tactics_drawn_total += 1
+                else:
+                    game.draw_card(player, from_tactics=False)
+
+                game_examples.append((draw_features, draw_mask, draw_action_idx, player, 0.0))
 
             game.turn += 1
-
-            # Capture draw decision example (no step bonus for draw, value will be set later)
-            game_examples.append((draw_features, draw_mask, draw_action_idx, player, 0.0))
 
         winner = game.winner
         if winner is None:

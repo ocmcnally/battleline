@@ -50,10 +50,9 @@ export default function ReplayPage({ onBack }: Props) {
   const [pov,     setPov]     = useState(0);
   const [error,   setError]   = useState<string | null>(null);
 
-  const totalMoves = data?.moves.length ?? 0;
   const states     = data ? (pov === 0 ? data.states_p0 : data.states_p1) : null;
+  const totalMoves = states ? states.length - 1 : 0;  // one state per turn including initial
   const state      = states?.[moveIdx] ?? null;
-  const lastMove   = moveIdx > 0 ? data?.moves[moveIdx - 1] : null;
   const atEnd      = moveIdx === totalMoves;
 
   const navigate = useCallback((delta: number) => {
@@ -176,7 +175,10 @@ export default function ReplayPage({ onBack }: Props) {
                           ? <span style={{ color: "var(--claimed-me)" }}>{data.players[data.winner]} wins</span>
                           : "Draw"}
                       </span>
-                    : <MoveLabel move={lastMove!} players={data.players} />
+                    // moves[] only has troop plays; tactics turns have no entry
+                  : data.moves[moveIdx - 1]
+                    ? <MoveLabel move={data.moves[moveIdx - 1]} players={data.players} />
+                    : <span style={{ color: "var(--text-dim)" }}>Tactics move</span>
                 }
               </div>
 
