@@ -81,11 +81,22 @@ BLOCK_SIZES = {
     "global":           8,
     "hand_compat":      NUM_TOTEMS * HAND_COMPAT_DIM,
     "achievable_board": NUM_TOTEMS * 2 * N_FORM_TYPES,
+    "tactics_count":    2,  # [my_tactics_count, opp_tactics_count] — explicit signal for draw decisions
 }
 TOTAL_DIM = sum(BLOCK_SIZES.values())
 
-# Policy covers every (troop-card, totem) pair
-POLICY_DIM = TROOP_COUNT * NUM_TOTEMS   # 540
+# Policy covers card plays + draw choice.
+# Card plays: 60 troops × 9 totems + tactics = 540 + 90 + 162 = 792
+#   tactics: fog/mud/alex/darius/wild8/wild321/deserter/scout = 90 slots
+#   traitor: 9 opp_src × 9 my_dst = 81 slots
+#   redeploy: 9 my_src × 9 my_dst = 81 slots
+# Draw choice: 2 (troop deck vs tactics deck)
+CARD_PLAY_DIM = 792
+DRAW_DIM = 2
+POLICY_DIM = CARD_PLAY_DIM + DRAW_DIM  # 794
+
+TROOP_POLICY_DIM = TROOP_COUNT * NUM_TOTEMS   # 540 (for reference)
+TACTICS_POLICY_DIM = CARD_PLAY_DIM - TROOP_POLICY_DIM  # 252
 
 
 # ── Low-level helpers ──────────────────────────────────────────────────────────
@@ -276,6 +287,14 @@ def encode_tactics_hand(game: BattleLineGame, player: int) -> List[float]:
     return vec
 
 
+def encode_tactics_count(game: BattleLineGame, player: int) -> List[float]:
+    """Explicit count of tactics cards in hand for each player (normalized)."""
+    my_tactics = sum(1 for c in game.hands[player] if isinstance(c, TacticsCard))
+    opp_tactics = sum(1 for c in game.hands[1 - player] if isinstance(c, TacticsCard))
+    # Normalize to [0, 1] (max 10 tactics possible)
+    return [my_tactics / 10.0, opp_tactics / 10.0]
+
+
 def encode_board(game: BattleLineGame, pov: int) -> List[float]:
     """All totem sides from pov's perspective. Own side always comes first."""
     out: List[float] = []
@@ -435,6 +454,7 @@ def encode(game: BattleLineGame, pov: int) -> List[float]:
         + encode_global(game, pov)
         + encode_hand_compat(game, pov)
         + encode_achievable_board(game, pov)
+        + encode_tactics_count(game, pov)
     )
 
 
@@ -446,6 +466,65 @@ def policy_index(card: Card, totem_idx: int) -> int:
 
 def policy_from_index(idx: int):
     return idx // TROOP_COUNT, idx % TROOP_COUNT   # totem_idx, card_slot
+
+
+# ── Tactics action encoding (Phase 1: simple placement + deserter) ────────────
+
+# Base indices for each tactic group within the tactics policy space
+# All wilds use unassigned (no suit/value choice), resolved at claim time.
+_TACTICS_BASE = TROOP_POLICY_DIM
+_FOG_BASE     = _TACTICS_BASE + 0
+_MUD_BASE     = _TACTICS_BASE + NUM_TOTEMS
+_ALEX_BASE    = _TACTICS_BASE + 2 * NUM_TOTEMS
+_DARIUS_BASE  = _TACTICS_BASE + 3 * NUM_TOTEMS
+_WILD8_BASE   = _TACTICS_BASE + 4 * NUM_TOTEMS
+_WILD321_BASE = _TACTICS_BASE + 5 * NUM_TOTEMS
+_DESERTER_BASE = _TACTICS_BASE + 6 * NUM_TOTEMS
+_SCOUT_BASE    = _TACTICS_BASE + 7 * NUM_TOTEMS
+_TRAITOR_BASE  = _SCOUT_BASE + 1                   # 9×9 = 81 slots
+_REDEPLOY_BASE = _TRAITOR_BASE + NUM_TOTEMS * NUM_TOTEMS  # 9×9 = 81 slots
+
+def fog_policy_index(totem_idx: int) -> int:
+    return _FOG_BASE + totem_idx
+
+def mud_policy_index(totem_idx: int) -> int:
+    return _MUD_BASE + totem_idx
+
+def alex_policy_index(totem_idx: int) -> int:
+    return _ALEX_BASE + totem_idx
+
+def darius_policy_index(totem_idx: int) -> int:
+    return _DARIUS_BASE + totem_idx
+
+def wild8_policy_index(totem_idx: int) -> int:
+    """Wild8 unassigned: choose totem only; suit/value resolved at claim time."""
+    return _WILD8_BASE + totem_idx
+
+def wild321_policy_index(totem_idx: int) -> int:
+    """Wild321 unassigned: choose totem only; suit/value resolved at claim time."""
+    return _WILD321_BASE + totem_idx
+
+def deserter_policy_index(opp_totem_idx: int) -> int:
+    """Deserter: choose opponent's totem to pull from."""
+    return _DESERTER_BASE + opp_totem_idx
+
+def scout_policy_index() -> int:
+    """Scout: single action (auto-return worst cards)."""
+    return _SCOUT_BASE
+
+def traitor_policy_index(opp_src: int, my_dst: int) -> int:
+    """Traitor: steal from opponent's opp_src totem to your my_dst totem."""
+    return _TRAITOR_BASE + opp_src * NUM_TOTEMS + my_dst
+
+def redeploy_policy_index(my_src: int, my_dst: int) -> int:
+    """Redeploy: move your card from my_src totem to my_dst totem."""
+    return _REDEPLOY_BASE + my_src * NUM_TOTEMS + my_dst
+
+
+# Draw actions (separate phase after each play)
+_DRAW_BASE = CARD_PLAY_DIM
+DRAW_TROOP = _DRAW_BASE + 0
+DRAW_TACTICS = _DRAW_BASE + 1
 
 
 def legal_troop_moves(game: BattleLineGame, player: int) -> List[tuple]:
@@ -460,14 +539,168 @@ def legal_troop_moves(game: BattleLineGame, player: int) -> List[tuple]:
     return moves
 
 
-def legal_mask(game: BattleLineGame, player: int) -> List[int]:
-    mask = [0] * POLICY_DIM
+def legal_draw_moves(game: BattleLineGame, player: int) -> List[tuple]:
+    """
+    Return legal draw choices.
+    Move format: (move_type, data, draw_source, policy_idx)
+    """
+    moves = []
+
+    # Can always draw from troop deck (if cards remain)
+    if len(game.deck) > 0:
+        moves.append(("draw_troop", (), "troop", DRAW_TROOP))
+
+    # Can draw from tactics deck if cards remain
+    if len(game.tactics_deck) > 0:
+        moves.append(("draw_tactics", (), "tactics", DRAW_TACTICS))
+
+    # Must be able to draw from at least one deck
+    if not moves:
+        # Both decks empty — this shouldn't happen in normal play
+        moves.append(("draw_troop", (), "troop", DRAW_TROOP))
+
+    return moves
+
+
+def legal_all_moves(game: BattleLineGame, player: int) -> List[tuple]:
+    """
+    Return all legal moves: troops + Phase 1 tactics.
+    Each move is (move_type, data, totem_idx, policy_idx) where:
+      move_type: "troop" | "fog" | "mud" | "alex" | "darius" | "wild8" | "wild321" | "deserter" | "scout" | "traitor" | "redeploy"
+      data: (card, ti) for troop; (suit_idx,) for wild8; etc.
+      totem_idx: target totem (or opponent totem for deserter, or -1 for scout)
+      policy_idx: the action index in [0, POLICY_DIM)
+    """
+    moves = []
+
+    # Troop plays
     for card in game.hands[player]:
         if not isinstance(card, Card) or isinstance(card, (WildCard, UnassignedWild, TacticsCard)):
             continue
         for ti, totem in enumerate(game.totems):
             if totem.claimed is None and not totem.is_full(player):
-                mask[policy_index(card, ti)] = 1
+                policy_idx = policy_index(card, ti)
+                moves.append(("troop", (card, ti), ti, policy_idx))
+
+    # Phase 1 tactics: only available if player hasn't overplayed tactics relative to opponent
+    can_play_tactics = game.can_play_tactics(player)
+
+    # Helper: check if player has a specific tactic in hand
+    def has_tactic(tactic_name: str) -> bool:
+        for c in game.hands[player]:
+            if isinstance(c, TacticsCard) and c.name == tactic_name:
+                return True
+        return False
+
+    # Fog: place on any unclaimed totem (only if tactics are allowed)
+    if can_play_tactics and has_tactic("fog"):
+        for ti in range(NUM_TOTEMS):
+            if game.totems[ti].claimed is None:
+                policy_idx = fog_policy_index(ti)
+                moves.append(("fog", (), ti, policy_idx))
+
+    # Mud: place on any unclaimed totem (only if tactics are allowed)
+    if can_play_tactics and has_tactic("mud"):
+        for ti in range(NUM_TOTEMS):
+            if game.totems[ti].claimed is None:
+                policy_idx = mud_policy_index(ti)
+                moves.append(("mud", (), ti, policy_idx))
+
+    # Alexander (wild): place on unclaimed, non-full totem (only if tactics allowed + not darius)
+    if can_play_tactics and has_tactic("alexander") and "darius" not in game.leaders_in_play[player]:
+        for ti in range(NUM_TOTEMS):
+            if game.totems[ti].claimed is None and not game.totems[ti].is_full(player):
+                policy_idx = alex_policy_index(ti)
+                moves.append(("alexander", (), ti, policy_idx))
+
+    # Darius (wild): place on unclaimed, non-full totem (only if tactics allowed + not alexander)
+    if can_play_tactics and has_tactic("darius") and "alexander" not in game.leaders_in_play[player]:
+        for ti in range(NUM_TOTEMS):
+            if game.totems[ti].claimed is None and not game.totems[ti].is_full(player):
+                policy_idx = darius_policy_index(ti)
+                moves.append(("darius", (), ti, policy_idx))
+
+    # Wild8 unassigned: choose totem only (only if tactics are allowed)
+    if can_play_tactics and has_tactic("wild8"):
+        for ti in range(NUM_TOTEMS):
+            if game.totems[ti].claimed is None and not game.totems[ti].is_full(player):
+                policy_idx = wild8_policy_index(ti)
+                moves.append(("wild8", (), ti, policy_idx))
+
+    # Wild321 unassigned: choose totem only (only if tactics are allowed)
+    if can_play_tactics and has_tactic("wild321"):
+        for ti in range(NUM_TOTEMS):
+            if game.totems[ti].claimed is None and not game.totems[ti].is_full(player):
+                policy_idx = wild321_policy_index(ti)
+                moves.append(("wild321", (), ti, policy_idx))
+
+    # Deserter: choose opponent's totem with cards (only if tactics are allowed)
+    if can_play_tactics and has_tactic("deserter"):
+        opp = 1 - player
+        for opp_ti in range(NUM_TOTEMS):
+            if game.totems[opp_ti].claimed is None and len(game.totems[opp_ti].sides[opp]) > 0:
+                policy_idx = deserter_policy_index(opp_ti)
+                moves.append(("deserter", (opp_ti,), opp_ti, policy_idx))
+
+    # Scout: play scout (only if tactics are allowed)
+    if can_play_tactics and has_tactic("scout"):
+        policy_idx = scout_policy_index()
+        moves.append(("scout", (), -1, policy_idx))
+
+    # Traitor: steal opponent's card from opp_src to my_dst (only if tactics are allowed)
+    if can_play_tactics and has_tactic("traitor"):
+        opp = 1 - player
+        for opp_src in range(NUM_TOTEMS):
+            if game.totems[opp_src].claimed is not None:
+                continue
+            if not game.totems[opp_src].sides[opp]:
+                continue
+            for my_dst in range(NUM_TOTEMS):
+                if game.totems[my_dst].claimed is not None:
+                    continue
+                if game.totems[my_dst].is_full(player):
+                    continue
+                policy_idx = traitor_policy_index(opp_src, my_dst)
+                moves.append(("traitor", (opp_src, my_dst), opp_src, policy_idx))
+
+    # Redeploy: move own card from my_src to my_dst (only if tactics are allowed)
+    if can_play_tactics and has_tactic("redeploy"):
+        for my_src in range(NUM_TOTEMS):
+            if game.totems[my_src].claimed is not None:
+                continue
+            if not game.totems[my_src].sides[player]:
+                continue
+            for my_dst in range(NUM_TOTEMS):
+                if my_dst == my_src:
+                    continue
+                if game.totems[my_dst].claimed is not None:
+                    continue
+                if game.totems[my_dst].is_full(player):
+                    continue
+                policy_idx = redeploy_policy_index(my_src, my_dst)
+                moves.append(("redeploy", (my_src, my_dst), my_src, policy_idx))
+
+    return moves
+
+
+def legal_mask(game: BattleLineGame, player: int, include_draw: bool = False) -> List[int]:
+    """
+    Extended legal mask covering troops, Phase 1 tactics, and optionally draw choices.
+
+    include_draw=False: mask only play actions (indices 0-629)
+    include_draw=True: mask both play actions and draw actions (indices 0-631)
+    """
+    mask = [0] * POLICY_DIM
+
+    # Play actions
+    for _, _, _, policy_idx in legal_all_moves(game, player):
+        mask[policy_idx] = 1
+
+    # Draw actions (if requested)
+    if include_draw:
+        for _, _, _, policy_idx in legal_draw_moves(game, player):
+            mask[policy_idx] = 1
+
     return mask
 
 

@@ -24,7 +24,7 @@ except ImportError:
     DataLoader = None
     TensorDataset = None
 
-from battleline import BattleLineGame
+from battleline import BattleLineGame, TacticsCard
 from game_loader import load_human_games
 from game_saver import save_game
 from server.serializer import game_view
@@ -34,6 +34,124 @@ from battleline_features import (
     legal_troop_moves,
     to_tensor,
 )
+
+
+# ── Move execution helpers ────────────────────────────────────────────────────────
+
+def _best_card_for_formation(candidates: list, current_formation: list):
+    """Return the card from candidates that maximizes formation quality when added to current_formation."""
+    from battleline_features import _formation_cards, _best_consistent_type
+    _SCORES = {1: 0.0, 2: 0.10, 3: 0.30, 4: 0.65, 5: 1.0}
+
+    def score(cards):
+        fc = _formation_cards(cards)
+        return _SCORES.get(_best_consistent_type(fc), 0.0) if fc else 0.0
+
+    best_card = candidates[0]
+    best_score = -1.0
+    for c in candidates:
+        s = score(current_formation + [c])
+        if s > best_score:
+            best_score = s
+            best_card = c
+    return best_card
+
+
+# ── Move execution ────────────────────────────────────────────────────────────────
+
+def play_move(game, player, move_info):
+    """
+    Execute a move returned from legal_all_moves.
+    move_info = (move_type, data, totem_idx, policy_idx)
+    """
+    move_type, data, totem_idx, policy_idx = move_info
+    tactic = None
+
+    if move_type == "troop":
+        card, ti = data
+        game.play_card(player, card, ti)
+
+    elif move_type == "fog":
+        tactic = next(c for c in game.hands[player]
+                     if isinstance(c, TacticsCard) and c.name == "fog")
+        game.play_environment(player, tactic, totem_idx)
+
+    elif move_type == "mud":
+        tactic = next(c for c in game.hands[player]
+                     if isinstance(c, TacticsCard) and c.name == "mud")
+        game.play_environment(player, tactic, totem_idx)
+
+    elif move_type == "alexander":
+        tactic = next(c for c in game.hands[player]
+                     if isinstance(c, TacticsCard) and c.name == "alexander")
+        game.play_unassigned_wild(player, tactic, totem_idx)
+
+    elif move_type == "darius":
+        tactic = next(c for c in game.hands[player]
+                     if isinstance(c, TacticsCard) and c.name == "darius")
+        game.play_unassigned_wild(player, tactic, totem_idx)
+
+    elif move_type == "wild8":
+        tactic = next(c for c in game.hands[player]
+                     if isinstance(c, TacticsCard) and c.name == "wild8")
+        game.play_unassigned_wild(player, tactic, totem_idx)
+
+    elif move_type == "wild321":
+        tactic = next(c for c in game.hands[player]
+                     if isinstance(c, TacticsCard) and c.name == "wild321")
+        game.play_unassigned_wild(player, tactic, totem_idx)
+
+    elif move_type == "deserter":
+        opp_ti, = data
+        tactic = next(c for c in game.hands[player]
+                     if isinstance(c, TacticsCard) and c.name == "deserter")
+        opp = 1 - player
+        opp_side = game.totems[opp_ti].sides[opp]
+        if opp_side:
+            card_to_remove = min(opp_side, key=lambda c: c.value if hasattr(c, 'value') else 0)
+            game.play_deserter(player, tactic, opp_ti, card_to_remove)
+
+    elif move_type == "traitor":
+        opp_src_ti, my_dst_ti = data
+        tactic = next(c for c in game.hands[player]
+                     if isinstance(c, TacticsCard) and c.name == "traitor")
+        opp = 1 - player
+        opp_side = game.totems[opp_src_ti].sides[opp]
+        if opp_side:
+            # Pick the opponent card that maximizes our destination formation quality
+            card_to_steal = _best_card_for_formation(opp_side, game.totems[my_dst_ti].sides[player])
+            game.play_traitor(player, tactic, opp_src_ti, card_to_steal, my_dst_ti)
+
+    elif move_type == "redeploy":
+        my_src_ti, my_dst_ti = data
+        tactic = next(c for c in game.hands[player]
+                     if isinstance(c, TacticsCard) and c.name == "redeploy")
+        my_side = game.totems[my_src_ti].sides[player]
+        if my_side:
+            # Pick the card that most improves the destination formation when moved
+            card_to_move = _best_card_for_formation(my_side, game.totems[my_dst_ti].sides[player])
+            game.play_redeploy(player, tactic, my_src_ti, card_to_move, my_dst_ti)
+
+    elif move_type == "scout":
+        tactic = next(c for c in game.hands[player]
+                     if isinstance(c, TacticsCard) and c.name == "scout")
+        troop_available = min(3, len(game.deck))
+        tactics_needed = 3 - troop_available
+        tactics_available = min(tactics_needed, len(game.tactics_deck))
+
+        if troop_available + tactics_available >= 3:
+            revealed = game.scout_reveal(player, tactic, troop_available, tactics_available)
+            # Scout: reveal 3, return 2 (keep 1)
+            # Strategy: keep highest-value card, return lowest two
+            drawn = [(c, source) for source, c in revealed]
+            sorted_by_val = sorted(drawn, key=lambda x: x[0].value if hasattr(x[0], 'value') else 0)
+            to_return = sorted_by_val[:2]  # Return 2 lowest-value cards
+            returns = [(c, source) for c, source in to_return]
+            game.scout_return(player, returns)
+        else:
+            game.hands[player].remove(tactic)
+            game.discarded.append(tactic)
+            game.tactics_played[player] += 1
 
 
 # ── Move selection ─────────────────────────────────────────────────────────────
@@ -83,19 +201,36 @@ def nn_choose_move(
 ):
     """
     Single-game move selection — used by evaluate_vs_greedy and sample_game.
+    Includes both troop plays and tactics. Returns full move_info tuple.
     For bulk game generation use generate_selfplay_dataset which batches
     all active games into one forward pass per round.
     """
-    moves = legal_troop_moves(game, player)
+    from battleline_features import legal_all_moves
+
+    moves = legal_all_moves(game, player)
     if not moves:
         return None
     with torch.no_grad():
         logits, _ = model(to_tensor(game, player))
-    action_idx = _sample_action(logits.squeeze(0), moves, temperature, noise_eps, noise_alpha)
-    for card, ti, idx in moves:
-        if idx == action_idx:
-            return card, ti, idx
-    return moves[0]
+    logits = logits.squeeze(0)  # Remove batch dimension if present
+
+    # Get policy logits for legal moves
+    policy_idxs = [move[-1] for move in moves]
+    lp = np.array([logits[idx].item() for idx in policy_idxs], dtype=np.float64)
+
+    # Sample from policy (with optional temperature + noise)
+    lp = np.exp(lp - lp.max())
+    if temperature > 1e-6:
+        lp = lp ** (1.0 / temperature)
+    lp /= lp.sum()
+    if noise_eps > 0 and len(moves) > 1:
+        noise = np.random.dirichlet([noise_alpha] * len(moves))
+        lp = (1 - noise_eps) * lp + noise_eps * noise
+        lp /= lp.sum()
+
+    # Pick move
+    best_idx = np.argmax(lp)
+    return moves[best_idx]
 
 
 # ── Greedy game generation ────────────────────────────────────────────────────
@@ -111,6 +246,7 @@ def _run_greedy_games(n_games: int) -> List[Tuple]:
     """
     import sys, os
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    import numpy as np
     from battleline import BattleLineGame, ai_choose_move
     from battleline_features import encode, legal_mask, legal_troop_moves
     from utils import compute_value, avg_formation_quality, claim_formation_bonus
@@ -124,6 +260,7 @@ def _run_greedy_games(n_games: int) -> List[Tuple]:
             player = game.turn % 2
             move   = ai_choose_move(game, player)
             if move is None or move[0] != "card":
+                # Greedy AI only plays troop cards; skip tactics
                 break
 
             _, card, ti = move
@@ -140,7 +277,10 @@ def _run_greedy_games(n_games: int) -> List[Tuple]:
 
             claimed_before = {i for i, t in enumerate(game.totems) if t.claimed == player}
             game.play_card(player, card, ti)
-            game.draw_card(player)
+
+            # Greedy: sometimes draw from tactics (20% chance) to expose model to tactics usage
+            draw_from_tactics = np.random.random() < 0.20
+            game.draw_card(player, from_tactics=draw_from_tactics)
             game.turn += 1
 
             newly_claimed = {i for i, t in enumerate(game.totems)
@@ -179,41 +319,207 @@ def _run_games(args: tuple) -> List[Tuple]:
     """
     Worker for multiprocessing game generation.
 
-    Runs sequential self-play in a subprocess. Must be a top-level function
-    (not a closure) so multiprocessing can pickle it on macOS spawn context.
+    Move selection uses top-K policy filtering + value-guided selection:
+      1. Apply Dirichlet noise + temperature to get a noisy policy distribution.
+      2. Take the top_k moves by noisy policy score as candidates.
+      3. Simulate each candidate move on a game copy and evaluate the resulting
+         position with the value head (batched into one forward pass).
+      4. Play the candidate with the highest value estimate.
 
-    Why multiprocessing instead of batched inference:
-    The bottleneck is Python-level work — encode(), legal_troop_moves(),
-    game logic — not the NN forward pass. Batching the forward pass doesn't
-    help when Python logic dominates. Splitting across CPU cores does.
+    This breaks the self-play echo chamber: pure policy sampling trains the
+    network to imitate its own (bad) moves.  Selecting among top_k candidates
+    by value means even a mediocre value head guides self-play toward better
+    positions, and better games produce better training signal.
     """
-    state_dict, n_games, temperature, noise_eps, noise_alpha, hidden_dim, n_blocks = args
+    state_dict, n_games, temperature, noise_eps, noise_alpha, hidden_dim, n_blocks, top_k = args
 
-    import sys, os
+    import sys, os, copy
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     import torch
     import numpy as np
-    from battleline import BattleLineGame
-    from battleline_features import BattleLineNet, POLICY_DIM, encode, legal_mask, legal_troop_moves, to_tensor
+    from battleline import BattleLineGame, TacticsCard, SUITS
+    from battleline_features import BattleLineNet, POLICY_DIM, encode, legal_mask, legal_all_moves, legal_draw_moves, to_tensor
     from utils import compute_value, avg_formation_quality, claim_formation_bonus
 
     model = BattleLineNet(hidden_dim=hidden_dim, n_blocks=n_blocks)
     model.load_state_dict(state_dict)
     model.eval()
 
-    def sample(logits, moves):
-        mask_t = torch.zeros(POLICY_DIM, dtype=torch.bool)
-        for _, _, idx in moves:
-            mask_t[idx] = True
-        logits = logits.masked_fill(~mask_t, float("-inf"))
-        if temperature < 1e-6:
-            return int(logits.argmax())
-        probs = torch.softmax(logits / temperature, dim=0).numpy()
-        lp = np.clip(probs[[idx for _, _, idx in moves]], 0, None)
-        if noise_eps > 0 and len(moves) > 1:
-            lp = (1 - noise_eps) * lp + noise_eps * np.random.dirichlet([noise_alpha] * len(moves))
+    # Track tactics usage for debugging
+    tactics_played_total = 0
+    tactics_drawn_total = 0
+
+    def play_move(game, player, move_info):
+        """
+        Execute a move returned from legal_all_moves.
+        move_info = (move_type, data, totem_idx, policy_idx)
+        """
+        move_type, data, totem_idx, policy_idx = move_info
+        tactic = None
+
+        if move_type == "troop":
+            card, ti = data
+            game.play_card(player, card, ti)
+            game.draw_card(player)
+
+        elif move_type == "fog":
+            tactic = next(c for c in game.hands[player]
+                         if isinstance(c, TacticsCard) and c.name == "fog")
+            game.play_environment(player, tactic, totem_idx)
+            game.draw_card(player)
+
+        elif move_type == "mud":
+            tactic = next(c for c in game.hands[player]
+                         if isinstance(c, TacticsCard) and c.name == "mud")
+            game.play_environment(player, tactic, totem_idx)
+            game.draw_card(player)
+
+        elif move_type == "alexander":
+            tactic = next(c for c in game.hands[player]
+                         if isinstance(c, TacticsCard) and c.name == "alexander")
+            game.play_unassigned_wild(player, tactic, totem_idx)
+            game.draw_card(player)
+
+        elif move_type == "darius":
+            tactic = next(c for c in game.hands[player]
+                         if isinstance(c, TacticsCard) and c.name == "darius")
+            game.play_unassigned_wild(player, tactic, totem_idx)
+            game.draw_card(player)
+
+        elif move_type == "wild8":
+            tactic = next(c for c in game.hands[player]
+                         if isinstance(c, TacticsCard) and c.name == "wild8")
+            game.play_unassigned_wild(player, tactic, totem_idx)
+            game.draw_card(player)
+
+        elif move_type == "wild321":
+            tactic = next(c for c in game.hands[player]
+                         if isinstance(c, TacticsCard) and c.name == "wild321")
+            game.play_unassigned_wild(player, tactic, totem_idx)
+            game.draw_card(player)
+
+        elif move_type == "deserter":
+            opp_ti, = data
+            tactic = next(c for c in game.hands[player]
+                         if isinstance(c, TacticsCard) and c.name == "deserter")
+            opp = 1 - player
+            opp_side = game.totems[opp_ti].sides[opp]
+            if opp_side:
+                # Auto-select lowest value card to remove
+                card_to_remove = min(opp_side, key=lambda c: c.value if hasattr(c, 'value') else 0)
+                game.play_deserter(player, tactic, opp_ti, card_to_remove)
+            game.draw_card(player)
+
+        elif move_type == "scout":
+            tactic = next(c for c in game.hands[player]
+                         if isinstance(c, TacticsCard) and c.name == "scout")
+            # Scout: draw 3 cards total (troop + tactics), keep best 2, discard worst
+            # Must draw exactly 3; fill with tactics if troops unavailable
+            troop_available = min(3, len(game.deck))
+            tactics_needed = 3 - troop_available
+            tactics_available = min(tactics_needed, len(game.tactics_deck))
+            troop_available = min(3, len(game.deck))  # Re-compute in case we need all remaining troops
+
+            if troop_available + tactics_available >= 3:
+                revealed = game.scout_reveal(player, tactic, troop_available, tactics_available)
+                drawn = [c for _, c in revealed]
+                # Keep best 2 by value (discard worst 1)
+                to_keep = sorted(drawn, key=lambda c: c.value if hasattr(c, 'value') else 0)[-2:]
+                to_discard = [c for c in drawn if c not in to_keep]
+                for c in to_discard:
+                    game.hands[player].remove(c)
+                    game.discarded.append(c)
+            else:
+                # Can't scout, not enough cards. Just discard scout and skip.
+                game.hands[player].remove(tactic)
+                game.discarded.append(tactic)
+                game.tactics_played[player] += 1
+
+    def pick_move_draw(game, player, moves):
+        """
+        Pick a draw move. Since there are only 2 options (troop vs tactics),
+        just use policy logits without value simulation.
+
+        If troop deck is empty, force tactics draw (if available).
+
+        Bias: ~85% explore troop, ~15% explore tactics. This gives the model
+        occasional exposure to tactics without over-drawing them early.
+        """
+        if len(moves) == 1:
+            return moves[0]
+
+        # Force tactics draw if troop deck is empty
+        if len(game.deck) == 0:
+            for move_info in moves:
+                if move_info[2] == "tactics":  # draw_source is at index 2
+                    return move_info
+            # If no tactics move available either, take what we have
+            return moves[0]
+
+        with torch.no_grad():
+            logits, _ = model(to_tensor(game, player))
+        logits = logits.squeeze(0)
+
+        # Pick draw move with highest policy logit + biased noise
+        policy_idxs = [move[-1] for move in moves]
+        lp = np.array([logits[idx].item() for idx in policy_idxs], dtype=np.float64)
+
+        # Pick draw move with strong bias toward troop (95% troop, 5% tactics)
+        # Minimal tactics exploration since they're rarely played anyway
+        if len(moves) > 1:
+            lp = np.exp(lp - lp.max())
+            # With 5% probability, occasionally explore tactics draws
+            if noise_eps > 0 and np.random.random() < 0.05:
+                # Occasionally explore tactics draws
+                best = 1  # Index 1 is tactics draw
+            else:
+                # Default to policy (which should learn to prefer troop draws early)
+                best = np.argmax(lp)
+        else:
+            best = int(np.argmax(lp))
+
+        return moves[best]
+
+    def pick_move(game, player, moves):
+        """Select a move via top-k policy + value head."""
+        with torch.no_grad():
+            logits, _ = model(to_tensor(game, player))
+        logits = logits.squeeze(0)
+
+        # Build noisy policy probabilities over legal moves.
+        policy_idxs = [move[-1] for move in moves]  # policy_idx is last element
+        lp = np.array([logits[idx].item() for idx in policy_idxs], dtype=np.float64)
+        lp = np.exp(lp - lp.max())          # softmax numerically stable
+        if temperature > 1e-6:
+            lp = lp ** (1.0 / temperature)
         lp /= lp.sum()
-        return moves[np.random.choice(len(moves), p=lp)][2]
+        if noise_eps > 0 and len(moves) > 1:
+            noise = np.random.dirichlet([noise_alpha] * len(moves))
+            lp = (1 - noise_eps) * lp + noise_eps * noise
+            lp /= lp.sum()
+
+        # Select top_k candidates by noisy policy score.
+        k = min(top_k, len(moves))
+        top_indices = np.argpartition(lp, -k)[-k:]
+        candidates  = [moves[i] for i in top_indices]
+
+        if k == 1:
+            return candidates[0]
+
+        # Simulate each candidate and batch-evaluate with the value head.
+        encoded = []
+        for move_info in candidates:
+            g = copy.deepcopy(game)
+            play_move(g, player, move_info)
+            g.turn += 1
+            encoded.append(encode(g, player))
+
+        feat_batch = torch.tensor(encoded, dtype=torch.float32)
+        with torch.no_grad():
+            _, values = model(feat_batch)
+
+        best = int(values.flatten().argmax().item())
+        return candidates[best]
 
     examples = []
     for _ in range(n_games):
@@ -222,24 +528,55 @@ def _run_games(args: tuple) -> List[Tuple]:
 
         while game.winner is None:
             player = game.turn % 2
-            moves = legal_troop_moves(game, player)
-            if not moves:
+
+            # 1. Play a card
+            play_moves = legal_all_moves(game, player)
+            if not play_moves:
                 break
-            features = encode(game, player)
-            mask = legal_mask(game, player)
-            with torch.no_grad():
-                logits, _ = model(to_tensor(game, player))
-            action_idx = sample(logits.squeeze(0), moves)
-            card, ti, _ = next((c, t, i) for c, t, i in moves if i == action_idx)
+
+            play_features = encode(game, player)
+            play_mask     = legal_mask(game, player)
+            play_move_info = pick_move(game, player, play_moves)
+            play_type, play_data, totem_idx, play_action_idx = play_move_info
+
             claimed_before = {i for i, t in enumerate(game.totems) if t.claimed == player}
-            game.play_card(player, card, ti)
-            game.draw_card(player)
-            game.turn += 1
+            play_move(game, player, play_move_info)
+
+            # Track if a tactic was played
+            if play_type != "troop":
+                tactics_played_total += 1
+
             newly_claimed = {i for i, t in enumerate(game.totems)
                              if t.claimed == player and i not in claimed_before}
             step_bonus = (avg_formation_quality(game, player)
                           + claim_formation_bonus(game, player, newly_claimed))
-            game_examples.append((features, mask, action_idx, player, step_bonus))
+
+            # Capture play decision example (value will be set later)
+            game_examples.append((play_features, play_mask, play_action_idx, player, step_bonus))
+
+            # 2. Choose draw source and draw
+            draw_moves = legal_draw_moves(game, player)
+            draw_features = encode(game, player)  # Features after play but before draw
+            # Create draw mask: all draw moves are legal (always 2 options)
+            draw_mask = [0] * POLICY_DIM
+            for _, _, _, draw_action_idx in draw_moves:
+                draw_mask[draw_action_idx] = 1
+
+            # For draw, skip top-K filtering since there are only 2 options.
+            # Just evaluate both directly without candidate filtering.
+            draw_move_info = pick_move_draw(game, player, draw_moves)
+            draw_type, draw_data, draw_source, draw_action_idx = draw_move_info
+
+            if draw_source == "tactics":
+                game.draw_card(player, from_tactics=True)
+                tactics_drawn_total += 1
+            else:
+                game.draw_card(player, from_tactics=False)
+
+            game.turn += 1
+
+            # Capture draw decision example (no step bonus for draw, value will be set later)
+            game_examples.append((draw_features, draw_mask, draw_action_idx, player, 0.0))
 
         winner = game.winner
         if winner is None:
@@ -251,6 +588,10 @@ def _run_games(args: tuple) -> List[Tuple]:
             value = compute_value(winner, sample_player, game.totems, step_bonus)
             examples.append((features, mask, action_idx, value))
 
+    # Debug: print tactics usage stats
+    if n_games > 0:
+        print(f"  [Worker] Tactics: {tactics_played_total} played, {tactics_drawn_total} drawn across {n_games} games", flush=True)
+
     return examples
 
 
@@ -260,16 +601,17 @@ def generate_selfplay_dataset(
     temperature: float = 1.0,
     noise_eps:   float = 0.25,
     device:      str   = "cpu",
-    hidden_dim:  int   = 512,
-    n_blocks:    int   = 6,
+    hidden_dim:  int   = 128,
+    n_blocks:    int   = 3,
     noise_alpha: float = 0.3,
+    top_k:       int   = 5,
 ) -> List[Tuple]:
     n_workers = min(mp.cpu_count(), n_games)
     base, rem = divmod(n_games, n_workers)
     split = [base + (1 if i < rem else 0) for i in range(n_workers)]
     state_dict = {k: v.cpu() for k, v in model.state_dict().items()}
     worker_args = [
-        (state_dict, g, temperature, noise_eps, noise_alpha, hidden_dim, n_blocks)
+        (state_dict, g, temperature, noise_eps, noise_alpha, hidden_dim, n_blocks, top_k)
         for g in split
     ]
     ctx = mp.get_context("spawn")
@@ -290,7 +632,9 @@ def _state_snapshot(game: BattleLineGame, pov: int) -> dict:
 
 
 def sample_game(model, iteration: int) -> None:
-    """Play one greedy game, capture full state sequence, and save for replay."""
+    """Play one sample game, capture full state sequence, and save for replay."""
+    from battleline_features import legal_troop_moves, legal_draw_moves
+
     model.eval()
     game  = BattleLineGame(["Model-P0", "Model-P1"])
     moves = []
@@ -300,13 +644,63 @@ def sample_game(model, iteration: int) -> None:
 
     while game.winner is None:
         player = game.turn % 2
-        move   = nn_choose_move(game, player, model, temperature=0.0)
-        if move is None:
+
+        # Use all legal moves (troops + tactics) to match self-play behavior
+        from battleline_features import legal_all_moves
+
+        all_moves = legal_all_moves(game, player)
+        if not all_moves:
             break
-        card, ti, _ = move
-        game.play_card(player, card, ti)
-        moves.append((player, card, ti))
-        game.draw_card(player)
+
+        # Pick best move by policy
+        with torch.no_grad():
+            logits, _ = model(to_tensor(game, player))
+        logits = logits.squeeze(0)
+
+        policy_idxs = [move[-1] for move in all_moves]
+        lp = np.array([logits[idx].item() for idx in policy_idxs], dtype=np.float64)
+        lp = np.exp(lp - lp.max())
+        lp /= lp.sum()
+        best_idx = np.argmax(lp)
+
+        move_info = all_moves[best_idx]
+        play_move(game, player, move_info)
+
+        # Only record troop moves in moves list (for save_game compatibility)
+        move_type, move_data, _, _ = move_info
+        if move_type == "troop":
+            card, ti = move_data
+            moves.append((player, card, ti))
+
+        # Choose draw source (greedy value-based)
+        draw_moves = legal_draw_moves(game, player)
+        if draw_moves:
+            with torch.no_grad():
+                logits, _ = model(to_tensor(game, player))
+            logits = logits.squeeze(0)
+
+            # Evaluate both draw options and pick the one with highest value
+            best_draw_move = None
+            best_value = float('-inf')
+            for move_info in draw_moves:
+                g = copy.deepcopy(game)
+                _, _, draw_source, _ = move_info
+                g.draw_card(player, from_tactics=(draw_source == "tactics"))
+                g.turn += 1
+                with torch.no_grad():
+                    _, value = model(to_tensor(g, player))
+                value = value.item()
+                if value > best_value:
+                    best_value = value
+                    best_draw_move = move_info
+
+            # Execute best draw move
+            if best_draw_move:
+                _, _, draw_source, _ = best_draw_move
+                game.draw_card(player, from_tactics=(draw_source == "tactics"))
+        else:
+            game.draw_card(player)  # Fallback
+
         game.turn += 1
         states_p0.append(_state_snapshot(game, 0))
         states_p1.append(_state_snapshot(game, 1))
@@ -336,6 +730,8 @@ def evaluate_models(new_model, old_model, n_games: int = 50) -> float:
     old_model.eval()
     new_wins = 0
 
+    from battleline_features import legal_draw_moves
+
     for i in range(n_games):
         game      = BattleLineGame(["New", "Old"])
         new_is_p0 = (i % 2 == 0)
@@ -343,12 +739,52 @@ def evaluate_models(new_model, old_model, n_games: int = 50) -> float:
         while game.winner is None:
             player = game.turn % 2
             model  = new_model if ((player == 0) == new_is_p0) else old_model
-            move   = nn_choose_move(game, player, model, temperature=0.0)
-            if move is None:
+
+            # 1. Get move (troop or tactic)
+            move_info = nn_choose_move(game, player, model, temperature=0.0)
+            if move_info is None:
                 break
-            card, ti, _ = move
-            game.play_card(player, card, ti)
-            game.draw_card(player)
+
+            # 2. Play move (supports all move types)
+            play_move(game, player, move_info)
+
+            # 3. Draw (force 5% exploration of tactics, else use value head)
+            # Note: tactics are drawn but rarely played; full tactical play requires
+            # additional training signals (formation bonuses, or warm-start tactical games)
+            draw_moves = legal_draw_moves(game, player)
+            if draw_moves:
+                # Force 5% of draws to be from tactics (minimal exploration)
+                if np.random.random() < 0.05 and len(draw_moves) > 1:
+                    # Force tactics draw
+                    for move in draw_moves:
+                        if move[2] == "tactics":
+                            game.draw_card(player, from_tactics=True)
+                            break
+                else:
+                    # Otherwise, use value head to pick best draw source
+                    with torch.no_grad():
+                        logits, _ = model(to_tensor(game, player))
+                    logits = logits.squeeze(0)
+
+                    best_draw = None
+                    best_value = float('-inf')
+                    for draw_move in draw_moves:
+                        g = copy.deepcopy(game)
+                        _, _, draw_source, _ = draw_move
+                        g.draw_card(player, from_tactics=(draw_source == "tactics"))
+                        g.turn += 1
+                        with torch.no_grad():
+                            _, value = model(to_tensor(g, player))
+                        if value.item() > best_value:
+                            best_value = value.item()
+                            best_draw = draw_move
+
+                    if best_draw:
+                        _, _, draw_source, _ = best_draw
+                        game.draw_card(player, from_tactics=(draw_source == "tactics"))
+            else:
+                game.draw_card(player)
+
             game.turn += 1
 
         winner = game.winner
@@ -497,7 +933,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Battle Line self-play training loop.")
     parser.add_argument("--iterations",        type=int,   default=20,   help="Number of self-play/train iterations.")
     parser.add_argument("--games",             type=int,   default=200,  help="Self-play games per iteration.")
-    parser.add_argument("--epochs",            type=int,   default=5,    help="Training epochs per iteration. Lower than before because the replay buffer already provides diversity — more epochs just overfits the current batch.")
+    parser.add_argument("--epochs",            type=int,   default=15,   help="Training epochs per iteration. Higher is fine with the smaller model (362K params) — overfitting is less of a concern than with the old 4M param model.")
     parser.add_argument("--batch-size",        type=int,   default=64)
     parser.add_argument("--lr",                type=float, default=1e-3)
     parser.add_argument("--value-weight",      type=float, default=10.0)
@@ -508,8 +944,9 @@ def main() -> int:
     parser.add_argument("--eval-games",        type=int,   default=50,   help="Games to evaluate new vs old model.")
     parser.add_argument("--promote-threshold", type=float, default=0.55, help="Win rate required to promote candidate.")
     parser.add_argument("--step-weight",       type=float, default=0.35, help="Weight of per-move formation/claim bonus in value target.")
-    parser.add_argument("--hidden-dim",        type=int,   default=512)
-    parser.add_argument("--n-blocks",          type=int,   default=6)
+    parser.add_argument("--hidden-dim",        type=int,   default=128,  help="Hidden layer size. Smaller = faster training on limited data.")
+    parser.add_argument("--n-blocks",          type=int,   default=3,    help="Number of residual blocks.")
+    parser.add_argument("--top-k",             type=int,   default=5,    help="Policy top-K: evaluate this many policy-candidate moves with the value head and pick the best.")
     parser.add_argument("--checkpoint-dir",    type=str,   default=os.path.join(os.path.dirname(__file__), "checkpoints"))
     parser.add_argument("--device",            type=str,   default="cpu")
     parser.add_argument("--fresh",             action="store_true", help="Ignore existing model and start from scratch.")
@@ -549,16 +986,25 @@ def main() -> int:
     # without any real improvement in play quality — the echo chamber problem).
     # We keep the last `buffer_iters` iterations rather than a fixed example
     # count so the buffer naturally scales with --games.
-    # Human games (if loaded) are added as the first buffer entry.
     replay_buffer: List[List] = []
+
+    # Anchor pool: high-quality examples that are ALWAYS included in every
+    # training batch regardless of how many self-play iterations have passed.
+    # Unlike the rolling buffer, the anchor is never evicted.
+    # Human games and greedy games go here — not into the rolling buffer —
+    # so they permanently anchor the training signal and prevent the model
+    # from drifting as self-play data accumulates.
+    anchor_examples: List[Tuple] = []
     if human_examples:
-        replay_buffer.append(human_examples)
+        anchor_examples.extend(human_examples)
+        print(f"Anchor: {len(human_examples)} human game examples.")
 
     if args.greedy_games > 0:
-        print(f"Generating {args.greedy_games} greedy warm-start games...")
+        print(f"Generating {args.greedy_games} greedy anchor games...")
         greedy_examples = generate_greedy_dataset(args.greedy_games)
-        replay_buffer.append(greedy_examples)
-        print(f"Generated {len(greedy_examples)} greedy examples.\n")
+        anchor_examples.extend(greedy_examples)
+        print(f"Anchor: added {len(greedy_examples)} greedy examples "
+              f"({len(anchor_examples)} total anchor).\n")
 
     for iteration in range(1, args.iterations + 1):
         iter_start = time.time()
@@ -577,6 +1023,7 @@ def main() -> int:
         new_examples = generate_selfplay_dataset(
             args.games, model, args.temperature, args.noise_eps,
             args.device, args.hidden_dim, args.n_blocks, args.noise_alpha,
+            args.top_k,
         )
         print(f"Generated {len(new_examples)} new examples.")
 
@@ -587,11 +1034,13 @@ def main() -> int:
         if len(replay_buffer) > args.buffer_iters:
             replay_buffer.pop(0)
 
-        # Flatten and shuffle all buffered examples for training.
-        all_examples = [ex for batch in replay_buffer for ex in batch]
+        # Combine anchor (always-present) + rolling buffer for training.
+        all_examples = list(anchor_examples) + [ex for batch in replay_buffer for ex in batch]
         random.shuffle(all_examples)
-        print(f"Replay buffer: {len(all_examples)} examples "
-              f"({len(replay_buffer)}/{args.buffer_iters} iterations).")
+        print(f"Training on {len(all_examples)} examples "
+              f"({len(anchor_examples)} anchor + "
+              f"{len(all_examples) - len(anchor_examples)} buffer "
+              f"[{len(replay_buffer)}/{args.buffer_iters} iters]).")
 
         # 3. Train a candidate starting from the current model's weights.
         # Training on the full buffer (not just new examples) means each
@@ -619,17 +1068,10 @@ def main() -> int:
             win_rate = 1.0
             print("Iteration 1 (fresh start): promoting without evaluation.")
         else:
-            # Promotion: model-vs-model. Works at any training stage and reliably
-            # detects improvement even when neither model can beat the greedy AI yet.
             print(f"Evaluating candidate vs current ({args.eval_games} games)...")
             win_rate = evaluate_models(candidate, model, args.eval_games)
             win_history.append(win_rate)
             print(f"  Candidate vs current: {win_rate:.1%}  (threshold {args.promote_threshold:.1%})")
-
-            # Diagnostic: how does the candidate fare against greedy?
-            # Not used for promotion — just tracks long-term progress.
-            greedy_rate = evaluate_vs_greedy(candidate, n_games=50)
-            print(f"  Candidate vs greedy:  {greedy_rate:.1%}  (diagnostic only)")
 
         # 5. Promote or discard.
         if win_rate >= args.promote_threshold:
