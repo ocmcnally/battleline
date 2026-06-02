@@ -139,6 +139,39 @@ def execute_move(game, player: int, move_info: tuple) -> None:
             game.tactics_played[player] += 1
 
 
+def choose_draw(game, player: int) -> bool:
+    """
+    Return True if AI should draw from the tactics deck, False for troop deck.
+    Uses model policy when available; falls back to troop-only.
+    Forces tactics draw when troop deck is empty.
+    """
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from training.battleline_features import legal_draw_moves, to_tensor
+
+    draw_moves = legal_draw_moves(game, player)
+    if not draw_moves:
+        return False
+    if len(game.deck) == 0:
+        return any(m[2] == "tactics" for m in draw_moves)
+
+    model = load_model()
+    if model is None:
+        return False
+
+    import torch
+    import numpy as np
+    with torch.no_grad():
+        logits, _ = model(to_tensor(game, player))
+    logits = logits.squeeze(0)
+
+    policy_idxs = [m[-1] for m in draw_moves]
+    lp = np.array([logits[idx].item() for idx in policy_idxs], dtype=np.float64)
+    lp = np.exp(lp - lp.max())
+    lp /= lp.sum()
+    best = draw_moves[int(np.argmax(lp))]
+    return best[2] == "tactics"
+
+
 def choose_move(game, player: int):
     """
     Return move_info tuple (move_type, data, totem_idx, policy_idx) for the AI's move,

@@ -130,9 +130,10 @@ async def _trigger_ai_move(session) -> None:
     move_type = move[0]
     try:
         bot.execute_move(session.game, ai_player, move)
-        # Scout handles its own draw internally; all other moves draw normally
+        # Scout handles its own draw internally; all other moves use model's draw choice
         if move_type != "scout":
-            session.game.draw_card(ai_player)
+            from_tactics = bot.choose_draw(session.game, ai_player)
+            session.game.draw_card(ai_player, from_tactics=from_tactics)
         session.game.turn += 1
     except Exception as e:
         print(f"[AI] move error: {e}")
