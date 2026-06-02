@@ -259,9 +259,15 @@ def _run_greedy_games(n_games: int) -> List[Tuple]:
         while game.winner is None:
             player = game.turn % 2
             move   = ai_choose_move(game, player)
+
+            # Greedy AI may return tactics if the player drew one; fall back to best troop move
             if move is None or move[0] != "card":
-                # Greedy AI only plays troop cards; skip tactics
-                break
+                troop_moves = legal_troop_moves(game, player)
+                if not troop_moves:
+                    break  # No troop cards at all — game is stuck, end it
+                # Pick highest-value troop move as fallback
+                best = max(troop_moves, key=lambda m: m[0].value)
+                move = ("card", best[0], best[1])
 
             _, card, ti = move
             features = encode(game, player)
@@ -295,8 +301,9 @@ def _run_greedy_games(n_games: int) -> List[Tuple]:
             p1 = sum(1 for t in game.totems if t.claimed == 1)
             winner = 0 if p0 >= p1 else 1
 
+        game_len = game.turn
         for features, mask, action_idx, sample_player, step_bonus in game_examples:
-            value = compute_value(winner, sample_player, game.totems, step_bonus)
+            value = compute_value(winner, sample_player, game.totems, step_bonus, game_len)
             examples.append((features, mask, action_idx, value))
 
     return examples
@@ -498,8 +505,9 @@ def _run_games(args: tuple) -> List[Tuple]:
             p1 = sum(1 for t in game.totems if t.claimed == 1)
             winner = 0 if p0 >= p1 else 1
 
+        game_len = game.turn
         for features, mask, action_idx, sample_player, step_bonus in game_examples:
-            value = compute_value(winner, sample_player, game.totems, step_bonus)
+            value = compute_value(winner, sample_player, game.totems, step_bonus, game_len)
             examples.append((features, mask, action_idx, value))
 
     # Debug: print tactics usage stats
@@ -990,9 +998,11 @@ def main() -> int:
         # 5. Promote or discard.
         if win_rate >= args.promote_threshold:
             model = candidate
-            torch.save(model.state_dict(), _MODEL_PATH)
+            _checkpoint = {"state_dict": model.state_dict(),
+                           "hidden_dim": args.hidden_dim, "n_blocks": args.n_blocks}
+            torch.save(_checkpoint, _MODEL_PATH)
             ckpt = os.path.join(args.checkpoint_dir, f"iter_{iteration:04d}.pt")
-            torch.save(model.state_dict(), ckpt)
+            torch.save(_checkpoint, ckpt)
             print(f"Promoted.  Saved to {ckpt}")
         else:
             print("Candidate rejected — keeping current model.")

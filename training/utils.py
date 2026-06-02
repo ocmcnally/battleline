@@ -65,29 +65,33 @@ def claim_formation_bonus(game, player: int, newly_claimed: set) -> float:
 
 # ── Value computation ──────────────────────────────────────────────────────────
 
+_MAX_GAME_LEN = 120  # ~60 troop cards + tactics buffer; used to normalise tempo
+
 def compute_value(
     winner:       int | None,
     player:       int,
     final_totems: list,
     step_bonus:   float = 0.0,
+    game_length:  int   = 0,
     outcome_w:    float = 0.50,
     margin_w:     float = 0.15,
     step_w:       float = 0.35,
+    tempo_w:      float = 0.08,
 ) -> float:
     """
     Shaped value target blending four signals:
 
       outcome   — did this player win? (+1 / 0 / −1)
       margin    — (my_totems − opp_totems) / 9  — partial credit for claims
-      step_bonus — per-move formation quality + claim bonus (avg_formation_quality
-                   + claim_formation_bonus computed during game generation)
+      step_bonus — per-move formation quality + claim bonus
+      tempo     — outcome × (1 − game_length / MAX) — small bonus for fast wins,
+                  small penalty for fast losses
 
-    Default weights sum to 1.0: outcome=0.50, margin=0.15, step=0.35.
-    The step component dominates early training when the network needs dense
-    signal; outcome remains the primary long-run objective.
+    Weights: outcome=0.50, margin=0.15, step=0.35, tempo=0.08 (additive).
     """
     outcome = 0.0 if winner is None else (1.0 if winner == player else -1.0)
     t_me    = sum(1 for t in final_totems if t.claimed == player)
     t_opp   = sum(1 for t in final_totems if t.claimed == (1 - player))
     margin  = (t_me - t_opp) / 9.0
-    return outcome_w * outcome + margin_w * margin + step_w * step_bonus
+    tempo   = outcome * max(0.0, 1.0 - game_length / _MAX_GAME_LEN)
+    return outcome_w * outcome + margin_w * margin + step_w * step_bonus + tempo_w * tempo
