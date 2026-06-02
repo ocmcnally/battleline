@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import List, Dict, Any
 from battleline import BattleLineGame, Card, SUITS
 
-GAMES_DIR = "saved_games"
+_PROJECT_ROOT   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+GAMES_DIR       = os.path.join(_PROJECT_ROOT, "saved_games")
 HUMAN_GAMES_DIR = os.path.join(GAMES_DIR, "human_games")
 
 def ensure_games_dir():
@@ -23,8 +24,9 @@ def save_game(
     filename:      str  | None = None,
     states:        dict | None = None,
     human:         bool = True,
-    initial_hands: list | None = None,
-    initial_deck:  list | None = None,
+    initial_hands:    list | None = None,
+    initial_deck:     list | None = None,
+    training_moves:   list | None = None,
 ) -> str:
     """
     Save a completed game to JSON.
@@ -45,13 +47,16 @@ def save_game(
     save_dir = HUMAN_GAMES_DIR if human else GAMES_DIR
     filepath = os.path.join(save_dir, filename)
 
+    def _move_dict(m):
+        player, card, ti = m[0], m[1], m[2]
+        drew_tactics = m[3] if len(m) > 3 else False
+        return {"player": player, "card": {"suit": card.suit, "value": card.value},
+                "totem_index": ti, "drew_from_tactics": drew_tactics}
+
     data: Dict[str, Any] = {
         "players": game.names,
         "winner":  winner,
-        "moves": [
-            {"player": player, "card": {"suit": card.suit, "value": card.value}, "totem_index": ti}
-            for player, card, ti in moves
-        ],
+        "moves":   [_move_dict(m) for m in moves],
     }
     if initial_hands is not None:
         data["initial_hands"] = [
@@ -60,6 +65,25 @@ def save_game(
         ]
     if initial_deck is not None:
         data["initial_deck"] = [{"suit": c.suit, "value": c.value} for c in initial_deck]
+    if training_moves is not None and len(training_moves) > 0:
+        # Compute value for each move now that we know the winner and final totems.
+        # Import here to avoid circular dependency at module load time.
+        from utils import compute_value
+        t_me  = [sum(1 for t in game.totems if t.claimed == p) for p in (0, 1)]
+        t_opp = [t_me[1], t_me[0]]
+        margin = [(t_me[p] - t_opp[p]) / 9.0 for p in (0, 1)]
+        outcome = {0: [1.0, -1.0], 1: [-1.0, 1.0], None: [0.0, 0.0]}[winner]
+        rows = []
+        for feats, msk, act_idx, player, step_bonus in training_moves:
+            value = compute_value(winner, player, game.totems, step_bonus)
+            rows.append({
+                "features":   feats,
+                "mask":       msk,
+                "action_idx": act_idx,
+                "player":     player,
+                "value":      value,
+            })
+        data["training_examples"] = rows
     if states is not None:
         data["states_p0"] = states["p0"]
         data["states_p1"] = states["p1"]
@@ -71,9 +95,13 @@ def save_game(
 
 def load_game(filepath: str) -> tuple[BattleLineGame, List[tuple], int | None]:
     """
-    Load a saved game and return (game, moves, winner).
-    Requires initial_hands and initial_deck to be present in the JSON —
-    games saved before those fields were added cannot be replayed accurately.
+    Load a saved game and return (initial_game, moves, winner).
+
+    initial_game has hands and deck set to the start-of-game state — no moves
+    played yet.  Callers that need to replay the game should step through moves
+    themselves using the initial_game as the starting point.
+
+    moves is a list of (player, Card, totem_index, drew_from_tactics).
     """
     with open(filepath, 'r') as f:
         data = json.load(f)
@@ -84,35 +112,23 @@ def load_game(filepath: str) -> tuple[BattleLineGame, List[tuple], int | None]:
             "it was saved before accurate replay was supported and cannot be loaded."
         )
 
+    # Build the initial game state with the saved deck/hand order.
     game = BattleLineGame(data["players"])
-
-    # Override the randomly-dealt hands and deck with the saved initial state
-    # so that replay follows the exact same card sequence as the original game.
     game.hands[0] = [Card(c["suit"], c["value"]) for c in data["initial_hands"][0]]
     game.hands[1] = [Card(c["suit"], c["value"]) for c in data["initial_hands"][1]]
     game.deck      = [Card(c["suit"], c["value"]) for c in data["initial_deck"]]
 
+    # Parse moves — include drew_from_tactics so callers can replay draws correctly.
     moves = []
     for move_data in data["moves"]:
-        player    = move_data["player"]
-        card_dict = move_data["card"]
-        ti        = move_data["totem_index"]
-
-        card = next(
-            (c for c in game.hands[player]
-             if c.suit == card_dict["suit"] and c.value == card_dict["value"]),
-            None
-        )
-        if card is None:
-            raise ValueError(f"Card {card_dict} not found in player {player}'s hand")
-
-        game.play_card(player, card, ti)
-        moves.append((player, card, ti))
-
-        if game.deck:
-            game.hands[player].append(game.deck.pop())
-
-        game.turn += 1
+        card_dict    = move_data["card"]
+        drew_tactics = move_data.get("drew_from_tactics", False)
+        moves.append((
+            move_data["player"],
+            Card(card_dict["suit"], card_dict["value"]),
+            move_data["totem_index"],
+            drew_tactics,
+        ))
 
     return game, moves, data["winner"]
 

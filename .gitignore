@@ -8,3 +8,4 @@ __pycache__/
 node_modules/
 client/dist/
 saved_games/
+training/checkpoints/

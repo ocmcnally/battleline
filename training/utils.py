@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(_HERE))  # project root (for battleline.py etc.)
+sys.path.insert(0, _HERE)                   # training/ (for battleline_features.py)
 
 from battleline_features import _formation_cards, _best_consistent_type
 

@@ -82,7 +82,7 @@ def nn_choose_move(
     noise_alpha: float = 0.3,
 ):
     """
-    Single-game move selection — used by evaluate_models and sample_game.
+    Single-game move selection — used by evaluate_vs_greedy and sample_game.
     For bulk game generation use generate_selfplay_dataset which batches
     all active games into one forward pass per round.
     """
@@ -96,6 +96,81 @@ def nn_choose_move(
         if idx == action_idx:
             return card, ti, idx
     return moves[0]
+
+
+# ── Greedy game generation ────────────────────────────────────────────────────
+
+def _run_greedy_games(n_games: int) -> List[Tuple]:
+    """
+    Generate training examples from greedy-vs-greedy self-play.
+
+    Uses the hand-crafted greedy AI (ai_choose_move) instead of the neural
+    network.  Greedy games are much higher quality than random self-play,
+    making them useful for warming up the replay buffer before NN training
+    begins.  No model needed — runs fast.
+    """
+    import sys, os
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from battleline import BattleLineGame, ai_choose_move
+    from battleline_features import encode, legal_mask, legal_troop_moves
+    from utils import compute_value, avg_formation_quality, claim_formation_bonus
+
+    examples = []
+    for _ in range(n_games):
+        game = BattleLineGame(["P0", "P1"])
+        game_examples = []
+
+        while game.winner is None:
+            player = game.turn % 2
+            move   = ai_choose_move(game, player)
+            if move is None or move[0] != "card":
+                break
+
+            _, card, ti = move
+            features = encode(game, player)
+            mask     = legal_mask(game, player)
+
+            action_idx = next(
+                (idx for c, t, idx in legal_troop_moves(game, player)
+                 if c.suit == card.suit and c.value == card.value and t == ti),
+                None,
+            )
+            if action_idx is None:
+                break
+
+            claimed_before = {i for i, t in enumerate(game.totems) if t.claimed == player}
+            game.play_card(player, card, ti)
+            game.draw_card(player)
+            game.turn += 1
+
+            newly_claimed = {i for i, t in enumerate(game.totems)
+                             if t.claimed == player and i not in claimed_before}
+            step_bonus = (avg_formation_quality(game, player)
+                          + claim_formation_bonus(game, player, newly_claimed))
+            game_examples.append((features, mask, action_idx, player, step_bonus))
+
+        winner = game.winner
+        if winner is None:
+            p0 = sum(1 for t in game.totems if t.claimed == 0)
+            p1 = sum(1 for t in game.totems if t.claimed == 1)
+            winner = 0 if p0 >= p1 else 1
+
+        for features, mask, action_idx, sample_player, step_bonus in game_examples:
+            value = compute_value(winner, sample_player, game.totems, step_bonus)
+            examples.append((features, mask, action_idx, value))
+
+    return examples
+
+
+def generate_greedy_dataset(n_games: int) -> List[Tuple]:
+    """Run greedy game generation in parallel across CPU cores."""
+    n_workers = min(mp.cpu_count(), n_games)
+    base, rem = divmod(n_games, n_workers)
+    split     = [base + (1 if i < rem else 0) for i in range(n_workers)]
+    ctx       = mp.get_context("spawn")
+    with ctx.Pool(n_workers) as pool:
+        results = pool.map(_run_greedy_games, split)
+    return [ex for batch in results for ex in batch]
 
 
 # ── Self-play data generation ──────────────────────────────────────────────────
@@ -252,16 +327,18 @@ def sample_game(model, iteration: int) -> None:
 def evaluate_models(new_model, old_model, n_games: int = 50) -> float:
     """
     Play n_games between new_model and old_model (greedy, no exploration).
-    Returns new_model's win rate.
-    Alternates which model plays as player 0 to remove first-move bias.
+    Returns new_model's win rate. Alternates sides to remove first-move bias.
+
+    Kept as an alternative to evaluate_vs_greedy — useful if you want to
+    switch back to direct model-vs-model promotion.
     """
     new_model.eval()
     old_model.eval()
     new_wins = 0
 
     for i in range(n_games):
-        game       = BattleLineGame(["New", "Old"])
-        new_is_p0  = (i % 2 == 0)
+        game      = BattleLineGame(["New", "Old"])
+        new_is_p0 = (i % 2 == 0)
 
         while game.winner is None:
             player = game.turn % 2
@@ -286,6 +363,59 @@ def evaluate_models(new_model, old_model, n_games: int = 50) -> float:
                 new_wins += 1
 
     return new_wins / n_games
+
+
+def evaluate_vs_greedy(model, n_games: int = 100) -> float:
+    """
+    Measure a model's win rate against the greedy AI over n_games.
+
+    Using a fixed external reference (greedy) rather than comparing models
+    against each other avoids the echo-chamber problem where two mediocre
+    models flip-flop at ~52% and the system thinks it's making progress.
+    A model that beats greedy more often is objectively better at the game.
+
+    Alternates sides to remove first-move bias.
+    """
+    from battleline import ai_choose_move
+
+    model.eval()
+    wins = 0
+
+    for i in range(n_games):
+        game        = BattleLineGame(["NN", "Greedy"])
+        nn_is_p0    = (i % 2 == 0)
+
+        while game.winner is None:
+            player    = game.turn % 2
+            nn_turn   = (player == 0) == nn_is_p0
+
+            if nn_turn:
+                move = nn_choose_move(game, player, model, temperature=0.0)
+                if move is None:
+                    break
+                card, ti, _ = move
+            else:
+                greedy = ai_choose_move(game, player)
+                if greedy is None or greedy[0] != "card":
+                    break
+                _, card, ti = greedy
+
+            game.play_card(player, card, ti)
+            game.draw_card(player)
+            game.turn += 1
+
+        winner = game.winner
+        if winner is None:
+            p0 = sum(1 for t in game.totems if t.claimed == 0)
+            p1 = sum(1 for t in game.totems if t.claimed == 1)
+            winner = 0 if p0 > p1 else (1 if p1 > p0 else None)
+
+        if winner is not None:
+            nn_player = 0 if nn_is_p0 else 1
+            if winner == nn_player:
+                wins += 1
+
+    return wins / n_games
 
 
 # ── Training ───────────────────────────────────────────────────────────────────
@@ -370,13 +500,13 @@ def main() -> int:
     parser.add_argument("--epochs",            type=int,   default=5,    help="Training epochs per iteration. Lower than before because the replay buffer already provides diversity — more epochs just overfits the current batch.")
     parser.add_argument("--batch-size",        type=int,   default=64)
     parser.add_argument("--lr",                type=float, default=1e-3)
-    parser.add_argument("--value-weight",      type=float, default=1.0)
-    parser.add_argument("--temperature",       type=float, default=1.0,  help="Move sampling temperature during self-play.")
+    parser.add_argument("--value-weight",      type=float, default=10.0)
+    parser.add_argument("--temperature",       type=float, default=0.5,  help="Move sampling temperature during self-play.")
     parser.add_argument("--noise-eps",         type=float, default=0.25, help="Dirichlet noise fraction mixed into policy during self-play (0 = off).")
     parser.add_argument("--noise-alpha",       type=float, default=0.3,  help="Dirichlet alpha — lower = more extreme noise.")
     parser.add_argument("--buffer-iters",      type=int,   default=10,   help="Keep examples from this many past iterations in the replay buffer.")
     parser.add_argument("--eval-games",        type=int,   default=50,   help="Games to evaluate new vs old model.")
-    parser.add_argument("--promote-threshold", type=float, default=0.52, help="Win rate required to promote candidate.")
+    parser.add_argument("--promote-threshold", type=float, default=0.55, help="Win rate required to promote candidate.")
     parser.add_argument("--step-weight",       type=float, default=0.35, help="Weight of per-move formation/claim bonus in value target.")
     parser.add_argument("--hidden-dim",        type=int,   default=512)
     parser.add_argument("--n-blocks",          type=int,   default=6)
@@ -384,6 +514,7 @@ def main() -> int:
     parser.add_argument("--device",            type=str,   default="cpu")
     parser.add_argument("--fresh",             action="store_true", help="Ignore existing model and start from scratch.")
     parser.add_argument("--include-human",     action="store_true", help="Include manually-created games from saved_games/ in the replay buffer.")
+    parser.add_argument("--greedy-games",      type=int, default=0, help="Generate this many greedy-vs-greedy games and add to the replay buffer as a warm-start.")
     args = parser.parse_args()
 
     os.makedirs(args.checkpoint_dir, exist_ok=True)
@@ -422,6 +553,12 @@ def main() -> int:
     replay_buffer: List[List] = []
     if human_examples:
         replay_buffer.append(human_examples)
+
+    if args.greedy_games > 0:
+        print(f"Generating {args.greedy_games} greedy warm-start games...")
+        greedy_examples = generate_greedy_dataset(args.greedy_games)
+        replay_buffer.append(greedy_examples)
+        print(f"Generated {len(greedy_examples)} greedy examples.\n")
 
     for iteration in range(1, args.iterations + 1):
         iter_start = time.time()
@@ -482,11 +619,17 @@ def main() -> int:
             win_rate = 1.0
             print("Iteration 1 (fresh start): promoting without evaluation.")
         else:
-            print(f"Evaluating ({args.eval_games} games)...")
+            # Promotion: model-vs-model. Works at any training stage and reliably
+            # detects improvement even when neither model can beat the greedy AI yet.
+            print(f"Evaluating candidate vs current ({args.eval_games} games)...")
             win_rate = evaluate_models(candidate, model, args.eval_games)
             win_history.append(win_rate)
-            print(f"Candidate win rate: {win_rate:.1%}  "
-                  f"(threshold {args.promote_threshold:.1%})")
+            print(f"  Candidate vs current: {win_rate:.1%}  (threshold {args.promote_threshold:.1%})")
+
+            # Diagnostic: how does the candidate fare against greedy?
+            # Not used for promotion — just tracks long-term progress.
+            greedy_rate = evaluate_vs_greedy(candidate, n_games=50)
+            print(f"  Candidate vs greedy:  {greedy_rate:.1%}  (diagnostic only)")
 
         # 5. Promote or discard.
         if win_rate >= args.promote_threshold:

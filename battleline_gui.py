@@ -16,7 +16,10 @@ from training.battleline_features import (
     BattleLineNet,
     legal_troop_moves,
     to_tensor,
+    encode,
+    legal_mask,
 )
+from training.utils import avg_formation_quality, claim_formation_bonus
 from training.game_saver import save_game
 
 try:
@@ -161,8 +164,10 @@ class BattleLineGUI:
         # Capture initial state immediately after creation so we can save it
         # later for accurate replay. After __init__ the deck is already dealt,
         # so we snapshot hands and remaining deck right here.
-        self._initial_hands = [list(self.game.hands[0]), list(self.game.hands[1])]
-        self._initial_deck  = list(self.game.deck)
+        self._initial_hands  = [list(self.game.hands[0]), list(self.game.hands[1])]
+        self._initial_deck   = list(self.game.deck)
+        self.training_moves  = []   # (features, mask, action_idx, player, step_bonus)
+        self._pre_move_state = None  # set in _capture_training_move, consumed in _finalize_training_move
         self.is_ai       = [False, mode == 2]
         self.pov         = 0
         self.sel         = None
@@ -630,8 +635,9 @@ class BattleLineGUI:
 
         if zone in ("col", "me") and ti is not None:
             try:
+                self._capture_training_move(self.pov, card, ti)
                 msg = g.play_card(self.pov, card, ti)
-                self.move_history.append((self.pov, card, ti))  # track move
+                self.move_history.append([self.pov, card, ti, False])
                 self.sel = None
                 self._finish_play(msg, needs_draw=True)
             except ValueError as e:
@@ -696,6 +702,41 @@ class BattleLineGUI:
         self.msg = "Action cancelled."
         self._refresh()
 
+    # ── Training data capture ─────────────────────────────────────────────────
+
+    def _capture_training_move(self, player: int, card, ti: int) -> None:
+        """Call immediately BEFORE play_card. Records pre-move state."""
+        try:
+            feats    = encode(self.game, player)
+            msk      = legal_mask(self.game, player)
+            act_idx  = None
+            for c, t, idx in legal_troop_moves(self.game, player):
+                if c.suit == card.suit and c.value == card.value and t == ti:
+                    act_idx = idx
+                    break
+            if act_idx is None:
+                self._pre_move_state = None
+                return
+            claimed_before = {i for i, t in enumerate(self.game.totems) if t.claimed == player}
+            self._pre_move_state = (feats, msk, act_idx, player, claimed_before)
+        except Exception:
+            self._pre_move_state = None
+
+    def _finalize_training_move(self) -> None:
+        """Call immediately AFTER draw_card. Computes step_bonus and stores the example."""
+        if self._pre_move_state is None:
+            return
+        feats, msk, act_idx, player, claimed_before = self._pre_move_state
+        self._pre_move_state = None
+        try:
+            newly = {i for i, t in enumerate(self.game.totems)
+                     if t.claimed == player and i not in claimed_before}
+            step_bonus = (avg_formation_quality(self.game, player)
+                          + claim_formation_bonus(self.game, player, newly))
+            self.training_moves.append((feats, msk, act_idx, player, step_bonus))
+        except Exception:
+            pass
+
     # ── Play completion ───────────────────────────────────────────────────────
 
     def _finish_play(self, msg: str, needs_draw: bool):
@@ -722,12 +763,15 @@ class BattleLineGUI:
     def _do_draw(self, from_tactics: bool):
         self.game.draw_card(self.pov, from_tactics)
         self._awaiting_draw = False
+        if self.move_history:
+            self.move_history[-1][3] = from_tactics  # record which deck was drawn from
         self._complete_turn()
 
     def _complete_turn(self):
         g = self.game
         g.turn += 1
         self._awaiting_draw = False
+        self._finalize_training_move()
         self._refresh()
         if g.winner is None:
             if self.is_ai[g.turn % 2]:
@@ -961,6 +1005,7 @@ class BattleLineGUI:
             return (msg, needs_draw, None)
         
         card, totem_idx, _ = best_move
+        self._capture_training_move(player, card, totem_idx)
         msg = game.play_card(player, card, totem_idx)
         return (msg, True, (player, card, totem_idx))
 
@@ -972,16 +1017,23 @@ class BattleLineGUI:
         if not self.is_ai[ai_p]:
             return
         
-        # Use NN model if available, otherwise use greedy AI
+        # Use NN model if available, otherwise use greedy AI.
+        # In both cases, record the move to move_history before executing it.
         if self.nn_model:
             msg, needs_draw, move_tuple = self._nn_ai_move(g, ai_p)
             if move_tuple:
-                self.move_history.append(move_tuple)
+                self.move_history.append([*move_tuple, False])
         else:
+            from battleline import ai_choose_move
+            chosen = ai_choose_move(g, ai_p)
+            if chosen is not None and chosen[0] == "card":
+                _, card, ti = chosen
+                self.move_history.append([ai_p, card, ti, False])
             msg, needs_draw = ai_make_move(g, ai_p)
-        
+
         if needs_draw:
             g.draw_card(ai_p, False)
+        self._finalize_training_move()
         self.msg = f"[{g.names[ai_p]}] {msg.replace(chr(10), '  ·  ')}"
         g.turn += 1
         self._refresh()
@@ -1031,7 +1083,8 @@ class BattleLineGUI:
             try:
                 filepath = save_game(g, self.move_history, g.winner,
                                     initial_hands=self._initial_hands,
-                                    initial_deck=self._initial_deck)
+                                    initial_deck=self._initial_deck,
+                                    training_moves=self.training_moves)
                 print(f"Game saved to {filepath}")
             except Exception as e:
                 print(f"Failed to save game: {e}")
