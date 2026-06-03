@@ -244,28 +244,63 @@ def _run_greedy_games(n_games: int) -> List[Tuple]:
     making them useful for warming up the replay buffer before NN training
     begins.  No model needed — runs fast.
     """
-    import sys, os
+    import sys, os, random
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     import numpy as np
-    from battleline import BattleLineGame, ai_choose_move
-    from battleline_features import encode, legal_mask, legal_troop_moves
+    from battleline import BattleLineGame, TacticsCard, ai_choose_move
+    from battleline_features import encode, legal_mask, legal_troop_moves, legal_all_moves
     from utils import compute_value, avg_formation_quality, claim_formation_bonus
 
     examples = []
-    for _ in range(n_games):
+    for game_num in range(n_games):
+        if game_num % 10 == 0:
+            print(f"  [greedy] game {game_num}/{n_games}...", flush=True)
         game = BattleLineGame(["P0", "P1"])
         game_examples = []
 
         while game.winner is None:
             player = game.turn % 2
-            move   = ai_choose_move(game, player)
 
-            # Greedy AI may return tactics if the player drew one; fall back to best troop move
+            # With 10% probability draw a tactics card, but only if hand has none already
+            # (cap at 1 to prevent ai_choose_move from becoming slow evaluating wilds)
+            has_tactic = any(isinstance(c, TacticsCard) for c in game.hands[player])
+            if not has_tactic and np.random.random() < 0.10 and len(game.tactics_deck) > 0:
+                game.tactics_deck  # draw happens after play below — flag for later
+                draw_from_tactics = True
+            else:
+                draw_from_tactics = False
+
+            # With 30% probability play a random tactic if one is in hand
+            tactic_moves = []
+            if has_tactic and game.can_play_tactics(player):
+                all_moves = legal_all_moves(game, player)
+                tactic_moves = [m for m in all_moves if m[0] != "troop"]
+
+            if tactic_moves and np.random.random() < 0.30:
+                move_info = random.choice(tactic_moves)
+                features   = encode(game, player)
+                mask       = legal_mask(game, player)
+                action_idx = move_info[-1]
+
+                claimed_before = {i for i, t in enumerate(game.totems) if t.claimed == player}
+                play_move(game, player, move_info)
+                if move_info[0] != "scout":
+                    game.draw_card(player, from_tactics=draw_from_tactics)
+                game.turn += 1
+
+                newly_claimed = {i for i, t in enumerate(game.totems)
+                                 if t.claimed == player and i not in claimed_before}
+                step_bonus = (avg_formation_quality(game, player)
+                              + claim_formation_bonus(game, player, newly_claimed))
+                game_examples.append((features, mask, action_idx, player, step_bonus))
+                continue
+
+            # Normal greedy troop play
+            move = ai_choose_move(game, player)
             if move is None or move[0] != "card":
                 troop_moves = legal_troop_moves(game, player)
                 if not troop_moves:
-                    break  # No troop cards at all — game is stuck, end it
-                # Pick highest-value troop move as fallback
+                    break
                 best = max(troop_moves, key=lambda m: m[0].value)
                 move = ("card", best[0], best[1])
 
@@ -284,8 +319,6 @@ def _run_greedy_games(n_games: int) -> List[Tuple]:
             claimed_before = {i for i, t in enumerate(game.totems) if t.claimed == player}
             game.play_card(player, card, ti)
 
-            # Greedy: sometimes draw from tactics (20% chance) to expose model to tactics usage
-            draw_from_tactics = np.random.random() < 0.20
             game.draw_card(player, from_tactics=draw_from_tactics)
             game.turn += 1
 
@@ -404,15 +437,23 @@ def _run_games(args: tuple) -> List[Tuple]:
         return moves[best]
 
     def pick_move(game, player, moves):
-        """Select a move via top-k policy + value head."""
+        """Select a move via top-k policy + 2-ply minimax value.
+
+        1. Select top-K candidates by noisy policy.
+        2. Simulate each candidate + troop draw.
+        3. Batch-evaluate opponent's policy on all K resulting states.
+        4. For each, simulate opponent's greedy best response + draw.
+        5. Batch-evaluate final states from our perspective; pick best.
+        """
+        opp = 1 - player
+
         with torch.no_grad():
             logits, _ = model(to_tensor(game, player))
         logits = logits.squeeze(0)
 
-        # Build noisy policy probabilities over legal moves.
-        policy_idxs = [move[-1] for move in moves]  # policy_idx is last element
+        policy_idxs = [move[-1] for move in moves]
         lp = np.array([logits[idx].item() for idx in policy_idxs], dtype=np.float64)
-        lp = np.exp(lp - lp.max())          # softmax numerically stable
+        lp = np.exp(lp - lp.max())
         if temperature > 1e-6:
             lp = lp ** (1.0 / temperature)
         lp /= lp.sum()
@@ -421,7 +462,6 @@ def _run_games(args: tuple) -> List[Tuple]:
             lp = (1 - noise_eps) * lp + noise_eps * noise
             lp /= lp.sum()
 
-        # Select top_k candidates by noisy policy score.
         k = min(top_k, len(moves))
         top_indices = np.argpartition(lp, -k)[-k:]
         candidates  = [moves[i] for i in top_indices]
@@ -429,15 +469,41 @@ def _run_games(args: tuple) -> List[Tuple]:
         if k == 1:
             return candidates[0]
 
-        # Simulate each candidate and batch-evaluate with the value head.
-        encoded = []
+        # Step 1: simulate our top-K moves + draw.
+        after_our_move = []
         for move_info in candidates:
             g = copy.deepcopy(game)
             play_move(g, player, move_info)
+            if move_info[0] != "scout":
+                g.draw_card(player)
             g.turn += 1
-            encoded.append(encode(g, player))
+            after_our_move.append(g)
 
-        feat_batch = torch.tensor(encoded, dtype=torch.float32)
+        # Step 2: batch-evaluate opponent's policy on all K states.
+        opp_encoded = [encode(g, opp) for g in after_our_move]
+        opp_batch   = torch.tensor(opp_encoded, dtype=torch.float32)
+        with torch.no_grad():
+            opp_logits_batch, _ = model(opp_batch)   # (K, POLICY_DIM)
+
+        # Step 3: simulate opponent's greedy best response + draw.
+        after_opp_move = []
+        for i, g in enumerate(after_our_move):
+            if g.winner is None:
+                opp_moves = legal_all_moves(g, opp)
+                if opp_moves:
+                    opp_lp = opp_logits_batch[i]
+                    best_opp = opp_moves[int(
+                        np.argmax([opp_lp[m[-1]].item() for m in opp_moves])
+                    )]
+                    play_move(g, opp, best_opp)
+                    if best_opp[0] != "scout":
+                        g.draw_card(opp)
+                    g.turn += 1
+            after_opp_move.append(g)
+
+        # Step 4: batch-evaluate final states from our perspective.
+        final_encoded = [encode(g, player) for g in after_opp_move]
+        feat_batch    = torch.tensor(final_encoded, dtype=torch.float32)
         with torch.no_grad():
             _, values = model(feat_batch)
 
@@ -855,12 +921,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Battle Line self-play training loop.")
     parser.add_argument("--iterations",        type=int,   default=20,   help="Number of self-play/train iterations.")
     parser.add_argument("--games",             type=int,   default=200,  help="Self-play games per iteration.")
-    parser.add_argument("--epochs",            type=int,   default=15,   help="Training epochs per iteration. Higher is fine with the smaller model (362K params) — overfitting is less of a concern than with the old 4M param model.")
+    parser.add_argument("--epochs",            type=int,   default=5,    help="Training epochs per iteration. Keep low to avoid catastrophic forgetting of incumbent weights.")
     parser.add_argument("--batch-size",        type=int,   default=64)
-    parser.add_argument("--lr",                type=float, default=1e-3)
+    parser.add_argument("--lr",                type=float, default=3e-4)
     parser.add_argument("--value-weight",      type=float, default=10.0)
     parser.add_argument("--temperature",       type=float, default=0.5,  help="Move sampling temperature during self-play.")
-    parser.add_argument("--noise-eps",         type=float, default=0.25, help="Dirichlet noise fraction mixed into policy during self-play (0 = off).")
+    parser.add_argument("--noise-eps",         type=float, default=0.15, help="Dirichlet noise fraction mixed into policy during self-play (0 = off).")
     parser.add_argument("--noise-alpha",       type=float, default=0.3,  help="Dirichlet alpha — lower = more extreme noise.")
     parser.add_argument("--buffer-iters",      type=int,   default=10,   help="Keep examples from this many past iterations in the replay buffer.")
     parser.add_argument("--eval-games",        type=int,   default=50,   help="Games to evaluate new vs old model.")
@@ -884,7 +950,11 @@ def main() -> int:
     model = BattleLineNet(hidden_dim=args.hidden_dim, n_blocks=args.n_blocks)
     started_fresh = args.fresh or not os.path.exists(_MODEL_PATH)
     if not started_fresh:
-        model.load_state_dict(torch.load(_MODEL_PATH, weights_only=True))
+        checkpoint = torch.load(_MODEL_PATH, weights_only=True)
+        if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
+            model.load_state_dict(checkpoint["state_dict"])
+        else:
+            model.load_state_dict(checkpoint)
         print(f"Loaded existing model from {_MODEL_PATH}")
     else:
         print("Starting with fresh model.")
