@@ -20,12 +20,13 @@ def _form_score(cards: list) -> float:
     pursue with the original linear scale (equal 0.25 gaps between all tiers).
 
     Linear (old):  HighSum=0.00  Straight=0.25  Flush=0.50  3OAK=0.75  SF=1.00
-    Non-linear:    HighSum=0.00  Straight=0.05  Flush=0.15  3OAK=0.65  SF=1.00
+    Non-linear:    HighSum=0.00  Straight=0.05  Flush=0.15  3OAK=0.80  SF=2.00
+    SF is doubled relative to 3OAK to push the model toward holding SF-capable cards.
     """
     if not cards:
         return 0.0
     t = _best_consistent_type(cards)
-    return {1: 0.0, 2: 0.10, 3: 0.30, 4: 0.65, 5: 1.0}.get(t, 0.0)
+    return {1: 0.0, 2: 0.10, 3: 0.30, 4: 0.80, 5: 2.0}.get(t, 0.0)
 
 
 def avg_formation_quality(game, player: int) -> float:
@@ -47,13 +48,12 @@ def avg_formation_quality(game, player: int) -> float:
 # Separate score table for claim bonuses — identical to _form_score except SF
 # gets a small extra bump (1.2 vs 1.0) to push the model toward finishing
 # straight flushes rather than settling for 3OAK or flush.
-_CLAIM_SCORES = {1: 0.0, 2: 0.10, 3: 0.30, 4: 0.65, 5: 1.2}
+_CLAIM_SCORES = {1: 0.0, 2: 0.10, 3: 0.30, 4: 1.0, 5: 3.0}
 
 def claim_formation_bonus(game, player: int, newly_claimed: set) -> float:
     """
     Reward for flags claimed on this move, weighted by the formation type
-    used to claim each one.  Uses _CLAIM_SCORES which gives SF a slight extra
-    bonus (1.2) over the ongoing quality score (1.0).
+    used to claim each one.
     """
     bonus = 0.0
     for i in newly_claimed:
@@ -61,6 +61,21 @@ def claim_formation_bonus(game, player: int, newly_claimed: set) -> float:
         t  = _best_consistent_type(fc)
         bonus += _CLAIM_SCORES.get(t, 0.0)
     return bonus
+
+
+def opponent_claim_penalty(game, player: int, opp_newly_claimed: set) -> float:
+    """
+    Penalty for flags claimed by the opponent on this move, weighted by their
+    formation type.  Mirrors claim_formation_bonus to give the model an
+    immediate negative signal when a move gifts the opponent a flag.
+    """
+    opp = 1 - player
+    penalty = 0.0
+    for i in opp_newly_claimed:
+        fc = _formation_cards(game.totems[i].sides[opp])
+        t  = _best_consistent_type(fc)
+        penalty += _CLAIM_SCORES.get(t, 0.0)
+    return penalty
 
 
 # ── Value computation ──────────────────────────────────────────────────────────

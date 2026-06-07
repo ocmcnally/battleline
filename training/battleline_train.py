@@ -249,7 +249,7 @@ def _run_greedy_games(n_games: int) -> List[Tuple]:
     import numpy as np
     from battleline import BattleLineGame, TacticsCard, ai_choose_move
     from battleline_features import encode, legal_mask, legal_troop_moves, legal_all_moves
-    from utils import compute_value, avg_formation_quality, claim_formation_bonus
+    from utils import compute_value, avg_formation_quality, claim_formation_bonus, opponent_claim_penalty
 
     examples = []
     for game_num in range(n_games):
@@ -270,28 +270,54 @@ def _run_greedy_games(n_games: int) -> List[Tuple]:
             else:
                 draw_from_tactics = False
 
-            # With 30% probability play a random tactic if one is in hand
-            tactic_moves = []
+            # Tactics play logic:
+            #   - Non-scout tactics: always play if they immediately claim a flag
+            #   - Scout: play with 30% probability (value is card-draw, not flag-winning)
+            winning_tactic_moves = []
+            scout_moves = []
             if has_tactic and game.can_play_tactics(player):
+                import copy as _copy
                 all_moves = legal_all_moves(game, player)
-                tactic_moves = [m for m in all_moves if m[0] != "troop"]
+                for m in all_moves:
+                    if m[0] == "troop":
+                        continue
+                    if m[0] == "scout":
+                        scout_moves.append(m)
+                    else:
+                        g = _copy.deepcopy(game)
+                        claimed_before_sim = {i for i, t in enumerate(g.totems) if t.claimed == player}
+                        play_move(g, player, m)
+                        claimed_after_sim = {i for i, t in enumerate(g.totems) if t.claimed == player}
+                        if len(claimed_after_sim) > len(claimed_before_sim):
+                            winning_tactic_moves.append(m)
 
-            if tactic_moves and np.random.random() < 0.30:
-                move_info = random.choice(tactic_moves)
+            tactic_move_to_play = None
+            if winning_tactic_moves:
+                tactic_move_to_play = random.choice(winning_tactic_moves)
+            elif scout_moves and np.random.random() < 0.30:
+                tactic_move_to_play = random.choice(scout_moves)
+
+            if tactic_move_to_play is not None:
+                move_info = tactic_move_to_play
                 features   = encode(game, player)
                 mask       = legal_mask(game, player)
                 action_idx = move_info[-1]
 
-                claimed_before = {i for i, t in enumerate(game.totems) if t.claimed == player}
+                opp = 1 - player
+                claimed_before     = {i for i, t in enumerate(game.totems) if t.claimed == player}
+                opp_claimed_before = {i for i, t in enumerate(game.totems) if t.claimed == opp}
                 play_move(game, player, move_info)
                 if move_info[0] != "scout":
                     game.draw_card(player, from_tactics=draw_from_tactics)
                 game.turn += 1
 
-                newly_claimed = {i for i, t in enumerate(game.totems)
-                                 if t.claimed == player and i not in claimed_before}
+                newly_claimed     = {i for i, t in enumerate(game.totems)
+                                     if t.claimed == player and i not in claimed_before}
+                opp_newly_claimed = {i for i, t in enumerate(game.totems)
+                                     if t.claimed == opp and i not in opp_claimed_before}
                 step_bonus = (avg_formation_quality(game, player)
-                              + claim_formation_bonus(game, player, newly_claimed))
+                              + claim_formation_bonus(game, player, newly_claimed)
+                              - opponent_claim_penalty(game, player, opp_newly_claimed))
                 game_examples.append((features, mask, action_idx, player, step_bonus))
                 continue
 
@@ -316,16 +342,21 @@ def _run_greedy_games(n_games: int) -> List[Tuple]:
             if action_idx is None:
                 break
 
-            claimed_before = {i for i, t in enumerate(game.totems) if t.claimed == player}
+            opp = 1 - player
+            claimed_before     = {i for i, t in enumerate(game.totems) if t.claimed == player}
+            opp_claimed_before = {i for i, t in enumerate(game.totems) if t.claimed == opp}
             game.play_card(player, card, ti)
 
             game.draw_card(player, from_tactics=draw_from_tactics)
             game.turn += 1
 
-            newly_claimed = {i for i, t in enumerate(game.totems)
-                             if t.claimed == player and i not in claimed_before}
+            newly_claimed     = {i for i, t in enumerate(game.totems)
+                                  if t.claimed == player and i not in claimed_before}
+            opp_newly_claimed = {i for i, t in enumerate(game.totems)
+                                  if t.claimed == opp and i not in opp_claimed_before}
             step_bonus = (avg_formation_quality(game, player)
-                          + claim_formation_bonus(game, player, newly_claimed))
+                          + claim_formation_bonus(game, player, newly_claimed)
+                          - opponent_claim_penalty(game, player, opp_newly_claimed))
             game_examples.append((features, mask, action_idx, player, step_bonus))
 
         winner = game.winner
@@ -379,7 +410,7 @@ def _run_games(args: tuple) -> List[Tuple]:
     import numpy as np
     from battleline import BattleLineGame, TacticsCard, SUITS
     from battleline_features import BattleLineNet, POLICY_DIM, encode, legal_mask, legal_all_moves, legal_draw_moves, to_tensor
-    from utils import compute_value, avg_formation_quality, claim_formation_bonus
+    from utils import compute_value, avg_formation_quality, claim_formation_bonus, opponent_claim_penalty
 
     model = BattleLineNet(hidden_dim=hidden_dim, n_blocks=n_blocks)
     model.load_state_dict(state_dict)
@@ -528,17 +559,22 @@ def _run_games(args: tuple) -> List[Tuple]:
             play_move_info = pick_move(game, player, play_moves)
             play_type, play_data, totem_idx, play_action_idx = play_move_info
 
-            claimed_before = {i for i, t in enumerate(game.totems) if t.claimed == player}
+            opp = 1 - player
+            claimed_before     = {i for i, t in enumerate(game.totems) if t.claimed == player}
+            opp_claimed_before = {i for i, t in enumerate(game.totems) if t.claimed == opp}
             play_move(game, player, play_move_info)
 
             # Track if a tactic was played
             if play_type != "troop":
                 tactics_played_total += 1
 
-            newly_claimed = {i for i, t in enumerate(game.totems)
-                             if t.claimed == player and i not in claimed_before}
+            newly_claimed     = {i for i, t in enumerate(game.totems)
+                                  if t.claimed == player and i not in claimed_before}
+            opp_newly_claimed = {i for i, t in enumerate(game.totems)
+                                  if t.claimed == opp and i not in opp_claimed_before}
             step_bonus = (avg_formation_quality(game, player)
-                          + claim_formation_bonus(game, player, newly_claimed))
+                          + claim_formation_bonus(game, player, newly_claimed)
+                          - opponent_claim_penalty(game, player, opp_newly_claimed))
 
             # Capture play decision example (value will be set later)
             game_examples.append((play_features, play_mask, play_action_idx, player, step_bonus))
