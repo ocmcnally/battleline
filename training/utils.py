@@ -63,6 +63,25 @@ def claim_formation_bonus(game, player: int, newly_claimed: set) -> float:
     return bonus
 
 
+def tactics_draw_penalty(tactics_in_hand: int, tactics_locked: bool = False) -> float:
+    """
+    Penalty for drawing a tactics card when you already have tactics in hand,
+    with an extra penalty when tactics-locked (already played one more tactic
+    than the opponent, so the drawn card can't be played until they catch up).
+    0 in hand  → no penalty (first tactic is fine to draw)
+    1 in hand  → moderate penalty
+    2+ in hand → strong penalty (almost never draw more)
+    +locked    → additional -0.25 on top of the base
+    """
+    if tactics_in_hand == 0:
+        base = 0.0
+    elif tactics_in_hand == 1:
+        base = -0.3
+    else:
+        base = -0.8
+    return base - (0.25 if tactics_locked else 0.0)
+
+
 def opponent_claim_penalty(game, player: int, opp_newly_claimed: set) -> float:
     """
     Penalty for flags claimed by the opponent on this move, weighted by their

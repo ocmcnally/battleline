@@ -162,8 +162,9 @@ class GameManager:
         session = self.sessions.pop(game_id, None)
         if session:
             for token in session.tokens:
-                self.token_to_game.pop(token, None)
-                self.token_to_player.pop(token, None)
+                if self.token_to_game.get(token) == game_id:
+                    self.token_to_game.pop(token, None)
+                    self.token_to_player.pop(token, None)
 
     # ── Session lookup ────────────────────────────────────────────────────────
 

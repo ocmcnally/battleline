@@ -410,7 +410,7 @@ def _run_games(args: tuple) -> List[Tuple]:
     import numpy as np
     from battleline import BattleLineGame, TacticsCard, SUITS
     from battleline_features import BattleLineNet, POLICY_DIM, encode, legal_mask, legal_all_moves, legal_draw_moves, to_tensor
-    from utils import compute_value, avg_formation_quality, claim_formation_bonus, opponent_claim_penalty
+    from utils import compute_value, avg_formation_quality, claim_formation_bonus, opponent_claim_penalty, tactics_draw_penalty
 
     model = BattleLineNet(hidden_dim=hidden_dim, n_blocks=n_blocks)
     model.load_state_dict(state_dict)
@@ -591,13 +591,17 @@ def _run_games(args: tuple) -> List[Tuple]:
                 draw_move_info = pick_move_draw(game, player, draw_moves)
                 _, _, draw_source, draw_action_idx = draw_move_info
 
+                tactics_in_hand = sum(1 for c in game.hands[player] if isinstance(c, TacticsCard))
+                tactics_locked  = game.tactics_played[player] > game.tactics_played[1 - player]
                 if draw_source == "tactics":
                     game.draw_card(player, from_tactics=True)
                     tactics_drawn_total += 1
+                    draw_step_bonus = tactics_draw_penalty(tactics_in_hand, tactics_locked)
                 else:
                     game.draw_card(player, from_tactics=False)
+                    draw_step_bonus = 0.0
 
-                game_examples.append((draw_features, draw_mask, draw_action_idx, player, 0.0))
+                game_examples.append((draw_features, draw_mask, draw_action_idx, player, draw_step_bonus))
 
             game.turn += 1
 
